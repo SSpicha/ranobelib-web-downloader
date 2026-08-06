@@ -188,7 +188,9 @@
           <div class="row">
             <button id="selectAll">Select all</button>
             <button id="deselectAll">Deselect all</button>
-            <button id="selectRange">Range...</button>
+            <input id="rangeFrom" type="number" min="0" placeholder="From" style="width:70px;" title="Chapter number from" />
+            <input id="rangeTo" type="number" min="0" placeholder="To" style="width:70px;" title="Chapter number to" />
+            <button id="applyRange">Apply range</button>
           </div>
         </div>
         <div id="chapters" class="chapters"></div>
@@ -226,6 +228,9 @@ const I18N = {
     selectAll: 'Select all',
     deselectAll: 'Deselect all',
     range: 'Range...',
+    from: 'From',
+    to: 'To',
+    applyRange: 'Apply range',
     branchPlaceholder: 'Branch...',
     cover: 'Cover',
     images: 'Images',
@@ -266,6 +271,9 @@ const I18N = {
     selectAll: 'Вибрати все',
     deselectAll: 'Зняти все',
     range: 'Діапазон...',
+    from: 'Від',
+    to: 'До',
+    applyRange: 'Застосувати',
     branchPlaceholder: 'Гілка...',
     cover: 'Обкладинка',
     images: 'Зображення',
@@ -325,7 +333,9 @@ function applyLang(lang) {
   $('chapterCountHint').textContent = t('chapters');
   $('selectAll').textContent = t('selectAll');
   $('deselectAll').textContent = t('deselectAll');
-  $('selectRange').textContent = t('range');
+  $('rangeFrom').placeholder = t('from');
+  $('rangeTo').placeholder = t('to');
+  $('applyRange').textContent = t('applyRange');
   $('branch').firstElementChild?.textContent && ($('branch').firstElementChild.textContent = t('branchPlaceholder'));
   $('coverCb').nextSibling.textContent = ' ' + t('cover');
   $('imagesCb').nextSibling.textContent = ' ' + t('images');
@@ -694,20 +704,32 @@ $('downloadSelected').addEventListener('click', () => downloadChapters([...state
 $('selectAll').addEventListener('click', () => { state.selected = new Set(state.chapters.map((_, i) => i)); renderChapters(state.chapters); });
 $('deselectAll').addEventListener('click', () => { state.selected = new Set(); renderChapters(state.chapters); });
 
-$('selectRange').addEventListener('click', () => {
+$('applyRange').addEventListener('click', () => {
   if (!state.chapters.length) return;
-  const input = prompt(`${t('range')} (1-${state.chapters.length}), e.g. "1-50":`);
-  if (!input) return;
-  const match = input.match(/^(\d+)\s*-\s*(\d+)$/);
-  if (match) {
-    const start = Math.max(1, parseInt(match[1], 10)) - 1;
-    const end = Math.min(state.chapters.length, parseInt(match[2], 10)) - 1;
-    state.selected = new Set();
-    for (let i = start; i <= end; i++) state.selected.add(i);
-    renderChapters(state.chapters);
-  } else {
+  const rawFrom = $('rangeFrom').value.trim();
+  const rawTo = $('rangeTo').value.trim();
+  if (!rawFrom && !rawTo) {
     alert(t('invalidRange'));
+    return;
   }
+  const nums = state.chapters.map(c => parseInt(c.number, 10)).filter(n => !isNaN(n));
+  const minN = nums.length ? Math.min(...nums) : 0;
+  const maxN = nums.length ? Math.max(...nums) : 0;
+  const a = rawFrom ? parseInt(rawFrom, 10) : minN;
+  const b = rawTo ? parseInt(rawTo, 10) : maxN;
+  if (isNaN(a) || isNaN(b)) {
+    alert(t('invalidRange'));
+    return;
+  }
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  state.selected = new Set();
+  state.chapters.forEach((ch, idx) => {
+    const n = parseInt(ch.number, 10);
+    if (!isNaN(n) && n >= lo && n <= hi) state.selected.add(idx);
+  });
+  renderChapters(state.chapters);
+  $('status').textContent = `${t('loaded')} ${state.chapters.length} • ${t('chapters')}: ${state.selected.size}`;
 });
 
 $('clear').addEventListener('click', () => {

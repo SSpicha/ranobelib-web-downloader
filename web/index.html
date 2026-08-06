@@ -72,7 +72,20 @@
   }
   .meta h2 { margin: 12px 0 6px; font-size: 18px; }
   .meta p { color: var(--muted); margin: 6px 0; line-height: 1.35; }
-  .chapters { overflow: auto; }
+  .chapters { overflow: visible; }
+  .chapter-scroll {
+    display: flex; flex-direction: column;
+    overflow-y: auto; flex: 1; min-height: 0;
+    max-height: 78vh;
+    border: 1px solid var(--border); border-radius: 12px;
+    background: rgba(255,255,255,0.015);
+  }
+  .chapter-head {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--panel);
+    padding: 10px 12px; margin-bottom: 0;
+    border-bottom: 1px solid var(--border);
+  }
   .chapter {
     display: flex; align-items: center; gap: 10px;
     padding: 10px; border-bottom: 1px solid var(--border);
@@ -183,17 +196,19 @@
         <p id="status" class="hint"></p>
       </section>
       <section class="panel">
-        <div class="row" style="justify-content:space-between; margin-bottom: 10px;">
-          <div class="hint" id="chapterCountHint">Chapters</div>
-          <div class="row">
-            <button id="selectAll">Select all</button>
-            <button id="deselectAll">Deselect all</button>
-            <input id="rangeFrom" type="number" min="0" placeholder="From" style="width:70px;" title="Chapter number from" />
-            <input id="rangeTo" type="number" min="0" placeholder="To" style="width:70px;" title="Chapter number to" />
-            <button id="applyRange">Apply range</button>
+        <div id="chapterScroll" class="chapter-scroll">
+          <div class="row chapter-head" style="justify-content:space-between;">
+            <div class="hint" id="chapterCountHint">Chapters</div>
+            <div class="row">
+              <button id="selectAll">Select all</button>
+              <button id="deselectAll">Deselect all</button>
+              <input id="rangeFrom" type="number" min="0" placeholder="From" style="width:70px;" title="Chapter number from" />
+              <input id="rangeTo" type="number" min="0" placeholder="To" style="width:70px;" title="Chapter number to" />
+              <button id="applyRange">Apply range</button>
+            </div>
           </div>
+          <div id="chapters" class="chapters"></div>
         </div>
-        <div id="chapters" class="chapters"></div>
       </section>
     </div>
   </main>

@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RanobeLIB Web Downloader</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0b0d12;
+    --panel: #13161c;
+    --border: #1f242d;
+    --text: #e7e9ee;
+    --muted: #9aa3b2;
+    --accent: #5ea1ff;
+    --danger: #ff6b6b;
+    --success: #3fb68b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    background: var(--bg);
+    color: var(--text);
+  }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    justify-content: space-between;
+  }
+  .brand { font-weight: 800; letter-spacing: 0.2px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input, select, button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font: inherit;
+  }
+  input[type="text"] { width: 340px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #0b0d12; border-color: var(--accent); font-weight: 700; }
+  button.danger { background: transparent; color: var(--danger); border-color: #2a2024; }
+  main { overflow: auto; padding: 18px; }
+  .grid { display: grid; grid-template-columns: 320px 1fr; gap: 18px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .cover-box {
+    width: 100%;
+    border-radius: 10px;
+    background: #0f1216;
+    aspect-ratio: 2 / 3;
+    overflow: hidden;
+  }
+  .cover-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 10px;
+    display: block;
+  }
+  .cover-box.empty {
+    background: repeating-conic-gradient(#1a1e24 0% 25%, #1f242d 0% 50%) 50% / 20px 20px;
+  }
+  .cover-box.empty img {
+    display: none;
+  }
+  .meta h2 { margin: 12px 0 6px; font-size: 18px; }
+  .meta p { color: var(--muted); margin: 6px 0; line-height: 1.35; }
+  .chapters { overflow: auto; }
+  .chapter {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px; border-bottom: 1px solid var(--border);
+  }
+  .chapter input { width: auto; }
+  .chapter .name { flex: 1; }
+  .chapter .badge { color: var(--muted); font-size: 12px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .team-filters { width: 100%; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+  .team-branch { font-weight: 600; font-size: 11px; opacity: .85; margin: 2px 0; }
+  .team-row { display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: 6px; }
+  .team-row:hover { background: rgba(255,255,255,0.04); }
+  .team-row input { width: auto; accent-color: var(--accent); }
+  .team-row .team-name { font-size: 12px; opacity: .9; }
+  .progress { height: 10px; background: #1b2028; border-radius: 999px; overflow: hidden; margin-top: 10px; }
+  .progress > span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #7dd3fc); transition: width .2s; }
+  .hint { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  .badge-team {
+    background: #1e293b; color: var(--accent); border: 1px solid #334155;
+    border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+  }
+  .btn-preview {
+    background: transparent; border: 1px solid var(--border); padding: 4px 8px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--muted);
+    transition: all .15s;
+  }
+  .btn-preview:hover {
+    color: var(--accent); border-color: var(--accent); background: rgba(94, 161, 255, 0.1);
+  }
+  select:disabled { opacity: 0.7; cursor: not-allowed; }
+  .modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(11, 13, 18, 0.85); backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; padding: 20px;
+  }
+  .modal-overlay[hidden] { display: none !important; }
+  .modal-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; width: 100%; max-width: 780px;
+    max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+  }
+  .modal-header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .modal-title { font-weight: 700; font-size: 16px; color: var(--text); }
+  .modal-body {
+    padding: 20px; overflow-y: auto; flex: 1; line-height: 1.75; color: #d1d5db;
+    font-size: 15px;
+  }
+  .modal-body img { max-width: 100%; border-radius: 8px; margin: 12px 0; display: block; }
+  .modal-body p { margin: 0 0 14px; text-indent: 1em; }
+  .modal-footer {
+    padding: 12px 20px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">RanobeLIB Web Downloader</div>
+    <div class="row">
+      <select id="lang">
+        <option value="en">English</option>
+        <option value="uk">Українська</option>
+      </select>
+      <input id="url" type="text" placeholder="" />
+      <button id="load" class="primary">Load</button>
+    </div>
+  </header>
+  <main>
+    <div id="workspace" class="grid" hidden>
+      <section class="panel meta">
+        <div id="coverBox" class="cover-box empty">
+          <img id="cover" alt="cover" />
+        </div>
+        <h2 id="title"></h2>
+        <p id="author"></p>
+        <p id="summary"></p>
+        <div class="toolbar">
+          <select id="format">
+            <option value="epub">EPUB</option>
+            <option value="html">HTML</option>
+            <option value="fb2">FB2</option>
+            <option value="txt">TXT</option>
+          </select>
+          <select id="profile">
+            <option value="generic">Generic</option>
+            <option value="x4_crosspoint">x4_crosspoint</option>
+          </select>
+          <select id="branch" disabled style="position:absolute; opacity:0; pointer-events:none; height:0; width:0; padding:0; margin:0; border:none;"></select>
+          <label class="row"><input id="coverCb" type="checkbox" checked /> Cover</label>
+          <label class="row"><input id="imagesCb" type="checkbox" checked /> Images</label>
+          <label class="row"><input id="grayCb" type="checkbox" /> Grayscale</label>
+          <label class="row"><input id="compressCb" type="checkbox" checked /> Compress</label>
+        </div>
+        <div id="teamFilters" class="team-filters"></div>
+        <div class="toolbar">
+          <button id="downloadSelected" class="primary">Download selected</button>
+          <button id="downloadAll">Download all</button>
+          <button id="clear" class="danger">Clear</button>
+        </div>
+        <div class="progress"><span id="progressBar"></span></div>
+        <p id="status" class="hint"></p>
+      </section>
+      <section class="panel">
+        <div class="row" style="justify-content:space-between; margin-bottom: 10px;">
+          <div class="hint" id="chapterCountHint">Chapters</div>
+          <div class="row">
+            <button id="selectAll">Select all</button>
+            <button id="deselectAll">Deselect all</button>
+            <button id="selectRange">Range...</button>
+          </div>
+        </div>
+        <div id="chapters" class="chapters"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="previewModal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div id="previewTitle" class="modal-title"></div>
+        <div id="previewSubtitle" class="hint" style="font-size:12px; margin-top:2px;"></div>
+      </div>
+      <button id="closePreview" class="danger" style="padding:4px 10px; font-size:16px;"></button>
+    </div>
+    <div id="previewBody" class="modal-body">
+    </div>
+    <div class="modal-footer">
+      <button id="prevChapterBtn"></button>
+      <div id="previewNavHint" class="hint" style="font-size:12px;"></div>
+      <button id="nextChapterBtn"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const I18N = {
+  en: {
+    emptyHint: 'Paste a novel link and press <b>Load</b>.',
+    chapters: 'Chapters',
+    selectAll: 'Select all',
+    deselectAll: 'Deselect all',
+    range: 'Range...',
+    branchPlaceholder: 'Branch...',
+    cover: 'Cover',
+    images: 'Images',
+    grayscale: 'Grayscale',
+    compress: 'Compress',
+    downloadSelected: 'Download selected',
+    downloadAll: 'Download all',
+    clear: 'Clear',
+    previewTitle: 'Chapter',
+    prev: 'Prev',
+    next: 'Next',
+    previewLoading: 'Loading...',
+    noChapterText: 'Chapter text is missing',
+    translationLabel: 'Translation',
+    loadError: 'Error: ',
+    downloadError: 'Download error: ',
+    taskError: 'Error: ',
+    startDownload: 'Starting download...',
+    doneDownload: 'Done! Downloading ',
+    progress: 'Progress: ',
+    loaded: 'Loaded: ',
+    noChaptersSelected: 'Please select at least one chapter',
+    invalidRange: 'Invalid range format. Use e.g. 1-50',
+    invalidBranch: 'Invalid branch selected',
+    failedStart: 'Failed to start download: ',
+    pollError: 'Error polling task: ',
+    loadingStatus: 'Loading...',
+    previewClickTitle: 'Click to preview',
+    previewBtnTitle: 'Preview',
+    authorPrefix: 'Author: ',
+    untitled: 'Untitled',
+    urlPlaceholder: 'https://ranobelib.me/ru/...',
+    close: 'Close',
+    load: 'Load',
+  },
+  uk: {
+    chapters: 'Глави',
+    selectAll: 'Вибрати все',
+    deselectAll: 'Зняти все',
+    range: 'Діапазон...',
+    branchPlaceholder: 'Гілка...',
+    cover: 'Обкладинка',
+    images: 'Зображення',
+    grayscale: 'Відтінки сірого',
+    compress: 'Стиснення',
+    downloadSelected: 'Завантажити вибране',
+    downloadAll: 'Завантажити все',
+    clear: 'Очистити',
+    previewTitle: 'Глава',
+    prev: '← Попередня',
+    next: 'Наступна →',
+    previewLoading: 'Завантаження...',
+    noChapterText: 'Текст глави відсутній',
+    translationLabel: 'Переклад',
+    loadError: 'Помилка: ',
+    downloadError: 'Помилка завантаження: ',
+    taskError: 'Помилка: ',
+    startDownload: 'Старт завантаження...',
+    doneDownload: 'Готово! Завантаження ',
+    progress: 'Прогрес: ',
+    loaded: 'Завантажено: ',
+    noChaptersSelected: 'Будь ласка, виберіть хоча б одну главу',
+    invalidRange: 'Невірний формат діапазону. Наприклад: 1-50',
+    invalidBranch: 'Обрано невірну гілку',
+    failedStart: 'Не вдалося запустити завантаження: ',
+    pollError: 'Помилка опитування задачі: ',
+    loadingStatus: 'Завантаження...',
+    previewClickTitle: 'Натисніть для попереднього перегляду',
+    previewBtnTitle: 'Попередній перегляд',
+    authorPrefix: 'Автор: ',
+    untitled: 'Без назви',
+    urlPlaceholder: 'https://ranobelib.me/ru/...',
+    close: 'Закрити',
+    load: 'Завантажити',
+  }
+};
+
+const state = {
+  api: '/api',
+  novel: null,
+  chapters: [],
+  selected: new Set(),
+  currentPreviewIndex: -1,
+  lang: 'en',
+};
+
+function t(key) {
+  const table = I18N[state.lang] || I18N.en;
+  return table[key] || key;
+}
+
+function applyLang(lang) {
+  state.lang = lang;
+  $('lang').value = lang;
+  try { localStorage.setItem('ranobelib_web_lang', lang); } catch (e) {}
+
+  $('chapterCountHint').textContent = t('chapters');
+  $('selectAll').textContent = t('selectAll');
+  $('deselectAll').textContent = t('deselectAll');
+  $('selectRange').textContent = t('range');
+  $('branch').firstElementChild?.textContent && ($('branch').firstElementChild.textContent = t('branchPlaceholder'));
+  $('coverCb').nextSibling.textContent = ' ' + t('cover');
+  $('imagesCb').nextSibling.textContent = ' ' + t('images');
+  $('grayCb').nextSibling.textContent = ' ' + t('grayscale');
+  $('compressCb').nextSibling.textContent = ' ' + t('compress');
+  $('downloadSelected').textContent = t('downloadSelected');
+  $('downloadAll').textContent = t('downloadAll');
+  $('clear').textContent = t('clear');
+  $('load').textContent = t('load');
+  $('previewTitle').textContent = t('previewTitle');
+  $('prevChapterBtn').textContent = t('prev');
+  $('nextChapterBtn').textContent = t('next');
+  $('closePreview').textContent = t('close');
+  $('url').placeholder = t('urlPlaceholder');
+
+  if (!state.novel) return;
+  renderChapters(state.chapters);
+  $('title').textContent = state.novel.title || '';
+  $('author').textContent = state.novel.author ? 'Author: ' + state.novel.author : '';
+  $('summary').textContent = state.novel.summary || '';
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(state.api + path, { headers: { 'content-type': 'application/json' }, ...opts });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json().catch(() => ({}));
+}
+
+function updateChapterCountHint() {
+  const hint = $('chapterCountHint');
+  if (hint) {
+    hint.textContent = `${t('chapters')} (${state.selected.size}/${state.chapters.length})`;
+  }
+}
+
+function saveOpts() {
+  try {
+    const opts = getOpts();
+    localStorage.setItem('ranobelib_web_opts', JSON.stringify(opts));
+  } catch (e) {}
+}
+
+function loadOpts() {
+  try {
+    const saved = localStorage.getItem('ranobelib_web_opts');
+    if (saved) {
+      const opts = JSON.parse(saved);
+      if (opts.format) $('format').value = opts.format;
+      if (opts.profile) $('profile').value = opts.profile;
+      if (opts.cover !== undefined) $('coverCb').checked = opts.cover;
+      if (opts.images !== undefined) $('imagesCb').checked = opts.images;
+      if (opts.compress !== undefined) $('compressCb').checked = opts.compress;
+      if (opts.grayscale !== undefined) $('grayCb').checked = opts.grayscale;
+    }
+  } catch (e) {}
+}
+
+function closePreview() {
+  $('previewModal').hidden = true;
+  state.currentPreviewIndex = -1;
+}
+
+async function openPreview(idx) {
+  if (!state.chapters[idx] || !state.novel) return;
+  state.currentPreviewIndex = idx;
+  const ch = state.chapters[idx];
+
+  $('previewModal').hidden = false;
+  $('previewTitle').textContent = `${t('previewTitle')} ${ch.volume}-${ch.number}${ch.name ? ' - ' + ch.name : ''}`;
+  $('previewSubtitle').textContent = `${state.novel.title || ''} • (${idx + 1} / ${state.chapters.length})`;
+  $('previewBody').innerHTML = '<p class="hint" style="text-align:center; padding:40px 0;">' + t('previewLoading') + '</p>';
+
+  $('prevChapterBtn').textContent = t('prev');
+  $('prevChapterBtn').disabled = (idx <= 0);
+  $('nextChapterBtn').textContent = t('next');
+  $('nextChapterBtn').disabled = (idx >= state.chapters.length - 1);
+  $('previewNavHint').textContent = `${idx + 1} / ${state.chapters.length}`;
+
+  try {
+    const slugVal = state.novel.slug_url || state.novel.slug || state.novel.id;
+    const res = await api('/chapter-content', {
+      method: 'POST',
+      body: JSON.stringify({
+        slug: slugVal,
+        volume: ch.volume,
+        number: ch.number,
+        branch_id: $('branch').value || undefined,
+      })
+    });
+
+    let htmlContent = res.html || '<p>' + t('noChapterText') + '</p>';
+    let teamNames = [];
+    if (Array.isArray(res.teams)) {
+      teamNames = res.teams.map(t2 => (t2 && typeof t2 === 'object') ? (t2.name || t2.username || '') : String(t2)).filter(Boolean);
+    }
+    if (teamNames.length) {
+      htmlContent = `<div style="margin-bottom:14px;"><span class="badge-team">${t('translationLabel')}: ${teamNames.join(', ')}</span></div>` + htmlContent;
+    }
+    $('previewBody').innerHTML = htmlContent;
+    $('previewBody').scrollTop = 0;
+  } catch (err) {
+    $('previewBody').innerHTML = `<p style="color:var(--danger)">${t('loadError')}${err.message}</p>`;
+  }
+}
+
+function prevPreview() {
+  if (state.currentPreviewIndex > 0) openPreview(state.currentPreviewIndex - 1);
+}
+function nextPreview() {
+  if (state.currentPreviewIndex < state.chapters.length - 1) openPreview(state.currentPreviewIndex + 1);
+}
+
+function renderChapters(list){
+  const box = $('chapters');
+  box.innerHTML = '';
+  list.forEach((ch, idx) => {
+    const row = document.createElement('div');
+    row.className = 'chapter';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.selected.has(idx);
+    cb.addEventListener('change', () => {
+      if (cb.checked) state.selected.add(idx); else state.selected.delete(idx);
+      updateChapterCountHint();
+    });
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.style.cursor = 'pointer';
+    name.textContent = `${t('previewTitle')} ${ch.number}${ch.name ? ' - ' + ch.name : ''}`;
+    name.title = t('previewClickTitle');
+    name.addEventListener('click', () => openPreview(idx));
+
+    const badge = document.createElement('div');
+    badge.className = 'badge';
+    badge.textContent = `v${ch.volume}`;
+
+    const btnPrev = document.createElement('button');
+    btnPrev.className = 'btn-preview';
+    btnPrev.innerHTML = '👁️';
+    btnPrev.title = t('previewBtnTitle');
+    btnPrev.addEventListener('click', (e) => { e.stopPropagation(); openPreview(idx); });
+
+    row.append(cb, name, badge, btnPrev);
+    box.appendChild(row);
+  });
+  updateChapterCountHint();
+}
+
+async function loadNovel(){
+  const url = $('url').value.trim();
+  if (!url) return;
+  $('status').textContent = t('loadingStatus');
+  $('progressBar').style.width = '0%';
+  try {
+    const data = await api('/load', { method: 'POST', body: JSON.stringify({ url }) });
+    state.novel = data;
+    state.defaultChapters = data.default_chapters || [];
+    state.chapters = state.defaultChapters;
+    state.selected.clear();
+    $('title').textContent = data.title || t('untitled');
+    $('author').textContent = data.author ? `${t('authorPrefix')}${data.author}` : '';
+    $('summary').textContent = data.summary || '';
+    const coverBox = $('coverBox');
+    if (data.cover) {
+      coverBox.classList.remove('empty');
+      $('cover').src = data.cover;
+    } else {
+      coverBox.classList.add('empty');
+      $('cover').src = '';
+    }
+
+    const teamContainer = $('teamFilters');
+    teamContainer.innerHTML = '';
+    state.selectedTeamKeys = new Set();
+    const branchSel = $('branch');
+    branchSel.innerHTML = '<option value="">All</option>';
+    branchSel.disabled = false;
+
+    const teams = Array.isArray(data.teams) ? data.teams : [];
+    const grouped = {};
+    for (const team of teams) {
+      const branchId = String(team.branch_id ?? '0');
+      if (!grouped[branchId]) grouped[branchId] = [];
+      grouped[branchId].push(team);
+    }
+
+    const branchOrder = (data.branches || []).map(b => String(b.id ?? '0'));
+    const sortedBranchIds = Object.keys(grouped).sort((a, b) => {
+      const ia = branchOrder.indexOf(a);
+      const ib = branchOrder.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+
+    for (const branchId of sortedBranchIds) {
+      const branchLabel = (grouped[branchId][0]?.branch_label || '').trim();
+      if (branchLabel) {
+        const branchTitle = document.createElement('div');
+        branchTitle.className = 'team-branch';
+        branchTitle.textContent = branchLabel;
+        teamContainer.appendChild(branchTitle);
+      }
+
+      for (const team of grouped[branchId]) {
+        const row = document.createElement('label');
+        row.className = 'team-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        const key = `${team.name}::${team.branch_id}`;
+        cb.dataset.teamKey = key;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'team-name';
+        nameSpan.textContent = team.name;
+        row.appendChild(cb);
+        row.appendChild(nameSpan);
+        teamContainer.appendChild(row);
+
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            state.selectedTeamKeys.clear();
+            document.querySelectorAll('#teamFilters input[type="checkbox"]').forEach(c => c.checked = false);
+            cb.checked = true;
+            state.selectedTeamKeys.add(key);
+            branchSel.value = team.branch_id || '';
+          } else {
+            state.selectedTeamKeys.delete(key);
+            branchSel.value = '';
+          }
+          applyTeamFilter();
+        });
+      }
+    }
+
+    function applyTeamFilter() {
+      if (state.selectedTeamKeys.size === 0) {
+        state.chapters = state.defaultChapters || [];
+        branchSel.value = '';
+      } else if (state.selectedTeamKeys.size === 1) {
+        const onlyKey = [...state.selectedTeamKeys][0];
+        const [, branchId] = onlyKey.split('::');
+        branchSel.value = branchId;
+        const seen = new Set();
+        const filtered = [];
+        for (const ch of (state.novel?.chapters || [])) {
+          const key = `${ch.volume ?? '0'}/${ch.number ?? '0'}`;
+          if (seen.has(key)) continue;
+          const matched = (ch.branches || []).some(b => {
+            const bid = String(b?.branch_id ?? '0');
+            const names = Array.isArray(b?.team_names) ? b.team_names : [];
+            return names.some(n => state.selectedTeamKeys.has(`${n}::${bid}`));
+          });
+          if (matched) {
+            seen.add(key);
+            filtered.push(ch);
+          }
+        }
+        state.chapters = filtered;
+      } else {
+        branchSel.value = '';
+        const seen = new Set();
+        const filtered = [];
+        for (const ch of (state.novel?.chapters || [])) {
+          const key = `${ch.volume ?? '0'}/${ch.number ?? '0'}`;
+          if (seen.has(key)) continue;
+          const matched = (ch.branches || []).some(b => {
+            const bid = String(b?.branch_id ?? '0');
+            const names = Array.isArray(b?.team_names) ? b.team_names : [];
+            return names.some(n => state.selectedTeamKeys.has(`${n}::${bid}`));
+          });
+          if (matched) {
+            seen.add(key);
+            filtered.push(ch);
+          }
+        }
+        state.chapters = filtered;
+      }
+      state.selected.clear();
+      renderChapters(state.chapters);
+      $('status').textContent = `${t('loaded')} ${state.chapters.length}`;
+    }
+
+    renderChapters(state.chapters);
+    $('workspace').hidden = false;
+    $('status').textContent = `${t('loaded')} ${state.chapters.length}`;
+  } catch (e) {
+    $('status').textContent = `${t('loadError')}${e.message}`;
+  }
+}
+
+function getOpts(){
+  return {
+    format: $('format').value,
+    profile: $('profile').value,
+    branch_id: $('branch').value || undefined,
+    selected_team_keys: state.selectedTeamKeys ? [...state.selectedTeamKeys] : [],
+    cover: $('coverCb').checked,
+    images: $('imagesCb').checked,
+    compress: $('compressCb').checked,
+    grayscale: $('grayCb').checked,
+  };
+}
+
+async function downloadChapters(indices){
+  if (!state.novel) return;
+  const chapters = indices.map(i => state.chapters[i]);
+  if (!chapters.length) {
+    $('status').textContent = t('noChaptersSelected');
+    return;
+  }
+
+  const branchVal = $('branch').value || '';
+  const validBranchIds = new Set((state.novel.branches || []).map(b => String(b.id || '')));
+  if (branchVal && !validBranchIds.has(branchVal)) {
+    $('status').textContent = t('invalidBranch');
+    return;
+  }
+
+  const body = {
+    slug: state.novel.slug_url || state.novel.slug || state.novel.id,
+    title: state.novel.title,
+    author: state.novel.author,
+    summary: state.novel.summary,
+    cover: state.novel.cover,
+    chapters,
+    ...getOpts(),
+  };
+  $('status').textContent = t('startDownload');
+  $('progressBar').style.width = '5%';
+  try {
+    const data = await api('/download', { method: 'POST', body: JSON.stringify(body) });
+    if (data?.task_id){
+      const tick = async () => {
+        try {
+          const task = await api('/tasks/' + data.task_id);
+          const pct = Math.max(0, Math.min(100, task?.progress ?? 0));
+          $('progressBar').style.width = pct + '%';
+          if (task?.status === 'done' && task?.file){
+            const a = document.createElement('a');
+            a.href = state.api + '/files/' + encodeURIComponent(task.file);
+            a.download = task.file;
+            a.click();
+            $('status').textContent = `${t('doneDownload')} ${task.file}`;
+            return;
+          }
+          if (task?.status === 'error'){
+            $('status').textContent = `${t('taskError')}${task.error || 'unknown'}`;
+            return;
+          }
+          $('status').textContent = `${t('progress')}${pct}%`;
+          setTimeout(tick, 800);
+        } catch (err) {
+          $('status').textContent = `${t('pollError')}${err.message}`;
+        }
+      };
+      tick();
+    }
+  } catch (err) {
+    $('status').textContent = `${t('failedStart')}${err.message}`;
+  }
+}
+
+$('load').addEventListener('click', loadNovel);
+$('downloadAll').addEventListener('click', () => downloadChapters(state.chapters.map((_, i) => i)));
+$('downloadSelected').addEventListener('click', () => downloadChapters([...state.selected]));
+
+$('selectAll').addEventListener('click', () => { state.selected = new Set(state.chapters.map((_, i) => i)); renderChapters(state.chapters); });
+$('deselectAll').addEventListener('click', () => { state.selected = new Set(); renderChapters(state.chapters); });
+
+$('selectRange').addEventListener('click', () => {
+  if (!state.chapters.length) return;
+  const input = prompt(`${t('range')} (1-${state.chapters.length}), e.g. "1-50":`);
+  if (!input) return;
+  const match = input.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (match) {
+    const start = Math.max(1, parseInt(match[1], 10)) - 1;
+    const end = Math.min(state.chapters.length, parseInt(match[2], 10)) - 1;
+    state.selected = new Set();
+    for (let i = start; i <= end; i++) state.selected.add(i);
+    renderChapters(state.chapters);
+  } else {
+    alert(t('invalidRange'));
+  }
+});
+
+$('clear').addEventListener('click', () => {
+  state.novel = null;
+  state.chapters = [];
+  state.selected = new Set();
+  state.selectedTeamKeys = new Set();
+  $('teamFilters').innerHTML = '';
+  $('branch').disabled = true;
+  $('branch').innerHTML = '<option value="">All</option>';
+  $('workspace').hidden = true;
+  $('status').textContent = '';
+  $('progressBar').style.width = '0%';
+  $('coverBox').classList.add('empty');
+  $('cover').src = '';
+});
+
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') loadNovel(); });
+
+$('closePreview').addEventListener('click', closePreview);
+$('prevChapterBtn').addEventListener('click', prevPreview);
+$('nextChapterBtn').addEventListener('click', nextPreview);
+
+document.addEventListener('keydown', e => {
+  if ($('previewModal').hidden) return;
+  if (e.key === 'Escape') closePreview();
+  if (e.key === 'ArrowLeft') prevPreview();
+  if (e.key === 'ArrowRight') nextPreview();
+});
+
+$('lang').addEventListener('change', () => applyLang($('lang').value));
+
+['format', 'profile', 'coverCb', 'imagesCb', 'grayCb', 'compressCb'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('change', saveOpts);
+});
+
+const savedLang = (() => { try { return localStorage.getItem('ranobelib_web_lang'); } catch (e) { return null; } })();
+applyLang(savedLang === 'uk' ? 'uk' : 'en');
+loadOpts();
+</script>
+</body>
+</html>

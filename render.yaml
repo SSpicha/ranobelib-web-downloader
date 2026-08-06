@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: ranobelib-web
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: KEEPALIVE
+        value: "1"
+      - key: KEEPALIVE_INTERVAL
+        value: "600"
+      # Optional auth token for protected instance
+      # - key: WEB_TOKEN
+      #   value: "..."
+    disk:
+      name: downloads
+      mountPath: /app/downloads
+      sizeGB: 1

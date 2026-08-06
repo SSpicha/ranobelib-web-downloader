@@ -16,7 +16,11 @@ services:
       # Optional auth token for protected instance
       # - key: WEB_TOKEN
       #   value: "..."
-    disk:
-      name: downloads
-      mountPath: /app/downloads
-      sizeGB: 1
+    # NOTE: Render free tier does NOT support persistent disks.
+    # Downloads live on the ephemeral container filesystem and are purged
+    # by the in-app TTL cleanup (downloads + temp images, 1h).
+    # If you upgrade to a paid plan, add a disk:
+    #   disk:
+    #     name: downloads
+    #     mountPath: /app/downloads
+    #     sizeGB: 1

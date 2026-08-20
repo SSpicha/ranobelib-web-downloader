@@ -7,6 +7,7 @@ It only:
 - serves the static SPA
 - serves generated files from /downloads
 """
+import asyncio
 import os
 import sys
 import time
@@ -301,7 +302,7 @@ async def load_novel(request: Request):
     if not slug:
         raise HTTPException(400, "Неверный формат ссылки")
 
-    novel_info = api.get_novel_info(slug)
+    novel_info = await asyncio.to_thread(api.get_novel_info, slug)
     if not isinstance(novel_info, dict):
         raise HTTPException(404, "Не удалось загрузить новеллу")
 
@@ -320,7 +321,7 @@ async def load_novel(request: Request):
         else:
             slug_url = slug
 
-    chapters_data = api.get_novel_chapters(slug_url)
+    chapters_data = await asyncio.to_thread(api.get_novel_chapters, slug_url)
     if not chapters_data:
         if novel_info.get("is_licensed"):
             raise HTTPException(403, "Доступ ограничен.")
@@ -519,7 +520,7 @@ async def chapter_content(request: Request):
         raise HTTPException(400, "slug, volume, number required")
 
     effective_branch = str(branch_id) if branch_id and str(branch_id) not in ("", "0", "default") else None
-    data = api.get_chapter_content(str(slug), str(volume), str(number), effective_branch)
+    data = await asyncio.to_thread(api.get_chapter_content, str(slug), str(volume), str(number), effective_branch)
 
     if not isinstance(data, dict):
         return {"volume": volume, "number": number, "name": "", "html": "<p>Не удалось загрузить содержимое главы</p>", "teams": []}
@@ -572,7 +573,7 @@ async def auth_token(request: Request):
     redirect_uri = body.get("redirect_uri")
     if not all([code, secret, redirect_uri]):
         raise HTTPException(400, "code, secret, redirect_uri required")
-    token_data = auth._exchange_code_for_token(code, secret, redirect_uri)
+    token_data = await asyncio.to_thread(auth._exchange_code_for_token, code, secret, redirect_uri)
     if not token_data:
         raise HTTPException(401, "Failed to exchange code")
     return {"access_token": token_data.get("access_token")}

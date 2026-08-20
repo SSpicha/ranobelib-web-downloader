@@ -582,6 +582,8 @@ async def auth_token(request: Request):
 @app.get("/api/files/{name}")
 def get_file(name: str):
     path = DOWNLOADS_DIR / name
+    if not path.resolve().is_relative_to(DOWNLOADS_DIR.resolve()):
+        raise HTTPException(400, "Недопустимий шлях")
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "Файл не найден")
     return FileResponse(path, filename=name)

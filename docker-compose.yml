@@ -1,0 +1,31 @@
+# Docker Compose for Oracle Always-Free (Ampere A1, aarch64)
+# Run on the VM:  docker compose up -d
+# App listens on 8080 inside the container; nginx (host) proxies :80/:443 -> :8080
+services:
+  ranobelib-web:
+    build: .
+    # No 'image:' — build locally on the ARM VM. Do NOT pull from x86 registries.
+    container_name: ranobelib-web
+    restart: always          # survive reboots + crash recovery
+    environment:
+      - KEEPALIVE=0          # Oracle VM is always-on; keepalive not needed
+      - KEEPALIVE_INTERVAL=600
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8080:8080"          # exposed on the VM; nginx (host) proxies to this
+    # Persist downloads + user_data across container restarts (VM disk is 200GB)
+    volumes:
+      - ./downloads:/app/downloads
+      - ./user_data:/app/user_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          # Leave headroom for OS + nginx. VM has 4 vCPU / 24GB.
+          cpus: "3.5"
+          memory: 20G

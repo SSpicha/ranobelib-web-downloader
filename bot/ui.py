@@ -14,7 +14,17 @@ State kept per-chat in USER_STATE (in-memory; fine for single-instance bot).
 """
 import os
 import sys
+import logging
 from pathlib import Path
+
+# --- logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[logging.FileHandler(Path(__file__).resolve().parent / "bot.log", encoding="utf-8"),
+              logging.StreamHandler()],
+)
+log = logging.getLogger("ranobelib_bot")
 
 # Make src/ importable (project root has src/web_app.py)
 _APP_ROOT = Path(__file__).resolve().parent.parent
@@ -96,6 +106,29 @@ async def cmd_start(m: types.Message):
     )
 
 
+@dp.message(Command("cancel"))
+async def cmd_cancel(m: types.Message):
+    if not _allowed(m.from_user.id):
+        return
+    USER_STATE.pop(m.from_user.id, None)
+    await m.answer("❌ Действие отменено. Пришли ссылку или нажми 📥 Скачати.")
+
+
+@dp.message(Command("help"))
+async def cmd_help(m: types.Message):
+    if not _allowed(m.from_user.id):
+        return
+    await m.answer(
+        "📖 Как пользоваться:\n"
+        "1. Пришли ссылку на новеллу (ranobelib.me)\n"
+        "2. Выбери формат (EPUB/FB2/TXT/HTML)\n"
+        "3. Выбери устройство (📱 XTEINK / 💻 Generic)\n"
+        "4. Выбери команду перевода\n"
+        "5. Введи диапазон глав: 'all' или '1-50'\n"
+        "Команды: /start /cancel /help",
+    )
+
+
 @dp.message(F.text)
 async def handle_text(m: types.Message):
     if not _allowed(m.from_user.id):
@@ -106,9 +139,13 @@ async def handle_text(m: types.Message):
     # step: waiting for chapter range
     if st.get("step") == "range":
         raw = m.text.strip().lower()
+        # strictly accept only 'all' / numbers / a-b ; ignore URLs or stray text
+        if "ranobelib" in raw or ("/" in raw and "-" not in raw and not raw.isdigit()):
+            await m.answer("⚠️ Сейчас ожидается диапазон глав. Введи 'all' или '1-50'. Для отмены — /cancel.")
+            return
         chapters = _parse_range(raw, st.get("total_chapters", 0))
         if chapters is None:
-            await m.answer("❌ Не понял. Введи 'all' или диапазон, напр. '1-50'.")
+            await m.answer("❌ Не понял. Введи 'all' или диапазон, напр. '1-50'. Или /cancel.")
             return
         st["chapters"] = chapters
         st["step"] = "run"
@@ -249,6 +286,10 @@ async def _deliver(m: types.Message, outcome: str):
     if outcome.startswith("__FILE__:"):
         fname = outcome.split(":", 1)[1]
         fpath = DOWNLOADS_DIR / fname
+        if not fpath.exists():
+            log.error("deliver: file missing %s", fpath)
+            await m.answer("❌ Файл не найден на диске после генерации.")
+            return
         await m.answer_document(FSInputFile(fpath), caption=f"✅ {fname}")
     else:
         await m.answer(outcome)
@@ -263,6 +304,7 @@ def _do_download(uid: int) -> str:
     dev = st.get("device", "generic")
     branch_id = st.get("branch_id")
     chapters = st.get("chapters", "ALL")
+    log.info("download start uid=%s slug=%s fmt=%s dev=%s branch=%s ch=%s", uid, slug, fmt, dev, branch_id, chapters)
     task_id = f"tg_{uid}_{int(time.time()*1000)}"
     body = {
         "slug": slug,
@@ -288,19 +330,23 @@ def _do_download(uid: int) -> str:
         if not t:
             break
         if t.get("status") == "error":
+            log.error("download error uid=%s: %s", uid, t.get("error"))
             return f"❌ Ошибка: {t.get('error', 'неизвестно')}"
         if t.get("status") == "done":
             file_name = t.get("file")
             if not file_name:
+                log.error("download done but no file uid=%s", uid)
                 return "❌ Файл не создан."
             fpath = DOWNLOADS_DIR / file_name
             size = fpath.stat().st_size if fpath.exists() else 0
+            log.info("download done uid=%s file=%s size=%d", uid, file_name, size)
             if PUBLIC_BASE and size > TELEGRAM_DOC_LIMIT:
                 return f"✅ Готово: {file_name} ({size//1024//1024} MB)\n🔗 {PUBLIC_BASE}/api/files/{file_name}"
             if size <= TELEGRAM_DOC_LIMIT:
                 return f"__FILE__:{file_name}"
             return f"✅ Готово: {file_name} ({size//1024//1024} MB)\n(>50MB, качай через веб: {PUBLIC_BASE})"
         time.sleep(5)
+    log.warning("download timeout uid=%s", uid)
     return "⏱️ Таймаут (>30 мин)."
 
 

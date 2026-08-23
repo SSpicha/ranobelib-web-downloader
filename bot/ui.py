@@ -97,12 +97,16 @@ def _kb(rows):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _cancel_row():
+    return [InlineKeyboardButton(text="❌ Скасувати", callback_data="act:cancel")]
+
+
 def _fmt_kb():
-    return _kb([[InlineKeyboardButton(text=t, callback_data=f"fmt:{v}") for t, v in FORMATS]])
+    return _kb([[InlineKeyboardButton(text=t, callback_data=f"fmt:{v}") for t, v in FORMATS]] + _cancel_row())
 
 
 def _dev_kb():
-    return _kb([[InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES]])
+    return _kb([[InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES]] + _cancel_row())
 
 
 def _team_kb(branches):
@@ -111,8 +115,8 @@ def _team_kb(branches):
     for bid, info in branches.items():
         label = f"{info['name']} ({info['chapter_count']})"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
-    # also "all teams / default" option
     rows.append([InlineKeyboardButton(text="🌐 Все команды", callback_data="team:ALL")])
+    rows += _cancel_row()
     return _kb(rows)
 
 
@@ -120,6 +124,7 @@ def _main_kb():
     return _kb([
         [InlineKeyboardButton(text="📥 Скачати новеллу", callback_data="act:download")],
         [InlineKeyboardButton(text="⚙️ Налаштування", callback_data="act:settings")],
+        [InlineKeyboardButton(text="❌ Скасувати", callback_data="act:cancel")],
     ])
 
 
@@ -130,8 +135,14 @@ async def cmd_start(m: types.Message):
         return
     USER_STATE.pop(m.from_user.id, None)
     await m.answer(
-        "📚 RanobeLIB бот\nОбери действие или пришли ссылку на новеллу с ranobelib.me.",
-        reply_markup=_main_kb(),
+        "📚 <b>RanobeLIB бот</b>\n"
+        "Скачивай ранобе с ranobelib.me прямо в Telegram.\n\n"
+        "🔹 Пришли ссылку на новеллу\n"
+        "🔹 Выбери формат, устройство (📱 XTEINK), команду перевода\n"
+        "🔹 Получи EPUB/FB2/TXT/HTML файлом\n\n"
+        "🔗 <a href=\"https://ranobelib.me\">ranobelib.me</a>\n"
+        "Команды: /start /cancel /help",
+        reply_markup=_main_kb(), parse_mode="HTML", disable_web_page_preview=True,
     )
 
 
@@ -227,6 +238,11 @@ async def act_menu(c: CallbackQuery):
         await c.answer("⛔", show_alert=True)
         return
     action = c.data.split(":", 1)[1]
+    if action == "cancel":
+        USER_STATE.pop(c.from_user.id, None)
+        await c.message.edit_text("❌ Действие отменено. Пришли ссылку или нажми 📥 Скачати.")
+        await c.answer()
+        return
     if action == "download":
         await c.message.answer("📥 Пришли ссылку на новеллу с ranobelib.me")
         await c.answer()
@@ -291,6 +307,17 @@ async def choose_dev(c: CallbackQuery):
         f"Устройство: <b>{USER_STATE[uid]['device']}</b>\nВыбери команду (перевод):",
         reply_markup=_team_kb(branches), parse_mode="HTML",
     )
+    # send cover image as a fresh message with team buttons
+    cover = (info.get("cover") or {}).get("default") or (info.get("cover") or {}).get("thumbnail")
+    title = info.get("rus_name") or info.get("eng_name") or USER_STATE[uid]["slug"]
+    cap = f"📕 <b>{title}</b>\nУстройство: {USER_STATE[uid]['device']}\nВыбери команду (перевод):"
+    try:
+        if cover:
+            await c.message.answer_photo(cover, caption=cap, reply_markup=_team_kb(branches), parse_mode="HTML")
+        else:
+            await c.message.answer(cap, reply_markup=_team_kb(branches), parse_mode="HTML")
+    except Exception:
+        await c.message.answer(cap, reply_markup=_team_kb(branches), parse_mode="HTML")
     await c.answer()
 
 
@@ -356,6 +383,11 @@ def _do_download(uid: int, m: types.Message = None, loop=None) -> str:
         rng = "выбранный диапазон"
     log.info("download start uid=%s slug=%s fmt=%s dev=%s branch=%s ch=%s", uid, slug, fmt, dev, branch_id, chapters)
 
+    def _bar(pct: int) -> str:
+        pct = max(0, min(100, pct))
+        filled = pct // 10
+        return "[" + "▓" * filled + "░" * (10 - filled) + f"] {pct}%"
+
     def _edit(text):
         if m is not None and loop is not None:
             try:
@@ -408,7 +440,7 @@ def _do_download(uid: int, m: types.Message = None, loop=None) -> str:
         pct = t.get("progress", 0)
         if pct != last_pct:
             last_pct = pct
-            _edit(f"⏳ <b>{team_name}</b> | {rng}\nПрогресс: {pct}%")
+            _edit(f"⏳ <b>{team_name}</b> | {rng}\n{_bar(pct)}")
         time.sleep(5)
     log.warning("download timeout uid=%s", uid)
     return "⏱️ Таймаут (>30 мин)."

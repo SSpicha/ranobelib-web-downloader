@@ -116,7 +116,7 @@ def _team_kb(branches):
         label = f"{info['name']} ({info['chapter_count']})"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
     rows.append([InlineKeyboardButton(text="🌐 Все команды", callback_data="team:ALL")])
-    rows += [_cancel_row()]
+    rows.append(_cancel_row()[0])
     return _kb(rows)
 
 

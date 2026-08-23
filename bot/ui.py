@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
 """
-Telegram bot UI for ranobelib-web downloader.
+Telegram bot UI for ranobelib-web downloader — full flow with team + chapter range.
 
-Full inline-keyboard flow:
+Flow:
   /start -> main menu [Download] [Settings]
   send URL -> ask FORMAT [EPUB][FB2][TXT][HTML]
             -> ask DEVICE [XTEINK][Generic]
-            -> run download with choices, live progress, deliver file/link
+            -> load novel -> ask TEAM [branch buttons]  (or skip if 1 branch)
+            -> ask RANGE  (text: "all" or "1-50" or "10-10")
+            -> run download with choices, deliver file/link
 
-State is kept per-chat in USER_STATE (in-memory; fine for single-instance bot).
+State kept per-chat in USER_STATE (in-memory; fine for single-instance bot).
 """
 import time
 import threading
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup,
-    FSInputFile, CallbackQuery,
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, CallbackQuery
 from aiogram import F
 
-# Reuse core download logic
-from web_app import run_download_task, tasks, tasks_lock, DOWNLOADS_DIR, _slug_from_url
+from web_app import (
+    run_download_task, tasks, tasks_lock, DOWNLOADS_DIR, _slug_from_url,
+    api,
+)
 
 import os
 
@@ -33,9 +35,7 @@ TELEGRAM_DOC_LIMIT = 50 * 1024 * 1024
 FORMATS = [("EPUB", "epub"), ("FB2", "fb2"), ("TXT", "txt"), ("HTML", "html")]
 DEVICES = [("📱 XTEINK", "x4_crosspoint"), ("💻 Generic", "generic")]
 
-# user_id -> dict(step, url, slug, fmt, device)
 USER_STATE = {}
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -54,6 +54,17 @@ def _fmt_kb():
 
 def _dev_kb():
     return _kb([[InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES]])
+
+
+def _team_kb(branches):
+    # branches: dict branch_id -> {name, chapter_count, team_names}
+    rows = []
+    for bid, info in branches.items():
+        label = f"{info['name']} ({info['chapter_count']})"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
+    # also "all teams / default" option
+    rows.append([InlineKeyboardButton(text="🌐 Все команды", callback_data="team:ALL")])
+    return _kb(rows)
 
 
 def _main_kb():
@@ -79,6 +90,25 @@ async def cmd_start(m: types.Message):
 async def handle_text(m: types.Message):
     if not _allowed(m.from_user.id):
         return
+    uid = m.from_user.id
+    st = USER_STATE.get(uid, {})
+
+    # step: waiting for chapter range
+    if st.get("step") == "range":
+        raw = m.text.strip().lower()
+        chapters = _parse_range(raw, st.get("total_chapters", 0))
+        if chapters is None:
+            await m.answer("❌ Не понял. Введи 'all' или диапазон, напр. '1-50'.")
+            return
+        st["chapters"] = chapters
+        st["step"] = "run"
+        await m.answer("⏳ Начинаю скачивание... Это может занять несколько минут.")
+        outcome = await asyncio.get_event_loop().run_in_executor(None, _do_download, uid)
+        await _deliver(m, outcome)
+        USER_STATE.pop(uid, None)
+        return
+
+    # default: treat as URL
     url = m.text.strip()
     if "ranobelib" not in url:
         await m.answer("Пришли ссылку на новеллу (ranobelib.me) или нажми 📥 Скачати.")
@@ -87,12 +117,31 @@ async def handle_text(m: types.Message):
     if not slug:
         await m.answer("❌ Неверный формат ссылки.")
         return
-    USER_STATE[m.from_user.id] = {"step": "fmt", "url": url, "slug": slug}
-    await m.answer(
-        f"📕 <b>{slug}</b>\nВыбери формат:",
-        reply_markup=_fmt_kb(),
-        parse_mode="HTML",
-    )
+    USER_STATE[uid] = {"step": "fmt", "url": url, "slug": slug}
+    await m.answer(f"📕 <b>{slug}</b>\nВыбери формат:", reply_markup=_fmt_kb(), parse_mode="HTML")
+
+
+def _parse_range(raw: str, total: int):
+    """Return list of {volume,number} or 'ALL' marker or None if invalid."""
+    if raw in ("all", "все", "*"):
+        return "ALL"
+    if "-" not in raw:
+        try:
+            n = int(raw)
+            return [{"volume": "0", "number": n}]
+        except ValueError:
+            return None
+    try:
+        a, b = raw.split("-", 1)
+        a, b = int(a), int(b)
+        if a > b or a < 1:
+            return None
+        out = []
+        for n in range(a, min(b, total or b) + 1):
+            out.append({"volume": "0", "number": n})
+        return out
+    except ValueError:
+        return None
 
 
 @dp.callback_query(F.data.startswith("act:"))
@@ -106,11 +155,9 @@ async def act_menu(c: CallbackQuery):
         await c.answer()
     elif action == "settings":
         st = USER_STATE.get(c.from_user.id, {})
-        cur_fmt = st.get("fmt", "epub")
-        cur_dev = st.get("device", "generic")
         await c.message.answer(
-            f"⚙️ Настройки по умолчанию:\nФормат: <b>{cur_fmt}</b>\nУстройство: <b>{cur_dev}</b>\n"
-            "Меняются при каждой загрузке через кнопки.",
+            f"⚙️ Последний выбор:\nФормат: <b>{st.get('fmt','epub')}</b>\n"
+            f"Устройство: <b>{st.get('device','generic')}</b>\nМеняется кнопками при загрузке.",
             parse_mode="HTML",
         )
         await c.answer()
@@ -122,13 +169,11 @@ async def choose_fmt(c: CallbackQuery):
     if uid not in USER_STATE or USER_STATE[uid].get("step") != "fmt":
         await c.answer("⚠️ Начни с ссылки.", show_alert=True)
         return
-    fmt = c.data.split(":", 1)[1]
-    USER_STATE[uid]["fmt"] = fmt
+    USER_STATE[uid]["fmt"] = c.data.split(":", 1)[1]
     USER_STATE[uid]["step"] = "dev"
     await c.message.edit_text(
-        f"Формат: <b>{fmt}</b>\nТеперь выбери устройство:",
-        reply_markup=_dev_kb(),
-        parse_mode="HTML",
+        f"Формат: <b>{USER_STATE[uid]['fmt']}</b>\nВыбери устройство:",
+        reply_markup=_dev_kb(), parse_mode="HTML",
     )
     await c.answer()
 
@@ -139,21 +184,64 @@ async def choose_dev(c: CallbackQuery):
     if uid not in USER_STATE or USER_STATE[uid].get("step") != "dev":
         await c.answer("⚠️ Начни с ссылки.", show_alert=True)
         return
-    dev = c.data.split(":", 1)[1]
-    USER_STATE[uid]["device"] = dev
-    USER_STATE[uid]["step"] = "run"
-    await c.message.edit_text("⏳ Начинаю скачивание... Это может занять несколько минут.")
+    USER_STATE[uid]["device"] = c.data.split(":", 1)[1]
+    USER_STATE[uid]["step"] = "team"
+    # load novel branches (teams)
+    slug = USER_STATE[uid]["slug"]
+    try:
+        info = api.get_novel_info(slug)
+        from web_app import normalize_novel_info, get_formatted_branches_with_teams
+        info = normalize_novel_info(info)
+        chapters = api.get_novel_chapters(slug)
+        branches = get_formatted_branches_with_teams(info, chapters)
+        USER_STATE[uid]["total_chapters"] = len(chapters)
+        USER_STATE[uid]["branches"] = branches
+    except Exception as e:
+        await c.message.edit_text(f"❌ Не удалось загрузить информацию: {e}")
+        await c.answer()
+        return
+    if not branches:
+        # no teams -> skip to range
+        USER_STATE[uid]["branch_id"] = None
+        USER_STATE[uid]["step"] = "range"
+        await c.message.edit_text(
+            f"Устройство: <b>{USER_STATE[uid]['device']}</b>\nВведи диапазон глав: 'all' или '1-50'",
+            parse_mode="HTML",
+        )
+        await c.answer()
+        return
+    await c.message.edit_text(
+        f"Устройство: <b>{USER_STATE[uid]['device']}</b>\nВыбери команду (перевод):",
+        reply_markup=_team_kb(branches), parse_mode="HTML",
+    )
+    await c.answer()
 
-    # run blocking work off event loop
-    loop = asyncio.get_event_loop()
-    outcome = await loop.run_in_executor(None, _do_download, uid)
+
+@dp.callback_query(F.data.startswith("team:"))
+async def choose_team(c: CallbackQuery):
+    uid = c.from_user.id
+    if uid not in USER_STATE or USER_STATE[uid].get("step") != "team":
+        await c.answer("⚠️ Начни с ссылки.", show_alert=True)
+        return
+    bid = c.data.split(":", 1)[1]
+    USER_STATE[uid]["branch_id"] = None if bid == "ALL" else bid
+    USER_STATE[uid]["step"] = "range"
+    total = USER_STATE[uid].get("total_chapters", 0)
+    await c.message.edit_text(
+        f"Команда: <b>{'все' if bid=='ALL' else USER_STATE[uid]['branches'].get(bid,{}).get('name',bid)}</b>\n"
+        f"Введи диапазон глав: 'all' или '1-{total}'",
+        parse_mode="HTML",
+    )
+    await c.answer()
+
+
+async def _deliver(m: types.Message, outcome: str):
     if outcome.startswith("__FILE__:"):
         fname = outcome.split(":", 1)[1]
         fpath = DOWNLOADS_DIR / fname
-        await c.message.answer_document(FSInputFile(fpath), caption=f"✅ {fname}")
+        await m.answer_document(FSInputFile(fpath), caption=f"✅ {fname}")
     else:
-        await c.message.answer(outcome)
-    USER_STATE.pop(uid, None)
+        await m.answer(outcome)
 
 
 def _do_download(uid: int) -> str:
@@ -163,6 +251,8 @@ def _do_download(uid: int) -> str:
         return "❌ Нет ссылки. Начни заново."
     fmt = st.get("fmt", "epub")
     dev = st.get("device", "generic")
+    branch_id = st.get("branch_id")
+    chapters = st.get("chapters", "ALL")
     task_id = f"tg_{uid}_{int(time.time()*1000)}"
     body = {
         "slug": slug,
@@ -171,7 +261,8 @@ def _do_download(uid: int) -> str:
         "cover": True,
         "images": True,
         "compress": True,
-        "chapters": [],
+        "branch_id": branch_id,
+        "chapters": [] if chapters == "ALL" else chapters,
     }
     with tasks_lock:
         tasks[task_id] = {
@@ -180,11 +271,7 @@ def _do_download(uid: int) -> str:
             "created_at": time.time(),
         }
     threading.Thread(target=run_download_task, args=(task_id, body), daemon=True).start()
-
-    # wait + live update
-    msg = None
     deadline = time.time() + 1800
-    last_pct = -1
     while time.time() < deadline:
         with tasks_lock:
             t = tasks.get(task_id)
@@ -203,23 +290,8 @@ def _do_download(uid: int) -> str:
             if size <= TELEGRAM_DOC_LIMIT:
                 return f"__FILE__:{file_name}"
             return f"✅ Готово: {file_name} ({size//1024//1024} MB)\n(>50MB, качай через веб: {PUBLIC_BASE})"
-        pct = t.get("progress", 0)
-        if pct != last_pct:
-            last_pct = pct
-            try:
-                import asyncio
-                asyncio.run_coroutine_threadsafe(
-                    _update_progress(coroutine_target=None), loop=None
-                )
-            except Exception:
-                pass
         time.sleep(5)
     return "⏱️ Таймаут (>30 мин)."
-
-
-# placeholder for progress update (kept simple: no live edit to avoid races)
-async def _update_progress(_):
-    return
 
 
 async def main():
@@ -230,5 +302,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())

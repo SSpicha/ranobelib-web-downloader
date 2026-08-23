@@ -12,6 +12,16 @@ Flow:
 
 State kept per-chat in USER_STATE (in-memory; fine for single-instance bot).
 """
+import os
+import sys
+from pathlib import Path
+
+# Make src/ importable (project root has src/web_app.py)
+_APP_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _APP_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 import time
 import threading
 import asyncio

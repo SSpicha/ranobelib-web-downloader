@@ -29,3 +29,24 @@ services:
           # Leave headroom for OS + nginx. VM has 4 vCPU / 24GB.
           cpus: "3.5"
           memory: 20G
+
+  ranobelib-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: ranobelib-bot
+    restart: always
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}   # set in .env or `docker compose run -e`
+      - ALLOWED_CHAT_IDS=${ALLOWED_CHAT_IDS:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - DOWNLOAD_FORMAT=epub
+      - PYTHONUNBUFFERED=1
+    # Share downloads/ so the bot can serve generated files (or link to web /api/files)
+    volumes:
+      - ./downloads:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M

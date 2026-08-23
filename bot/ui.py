@@ -56,8 +56,37 @@ FORMATS = [("EPUB", "epub"), ("FB2", "fb2"), ("TXT", "txt"), ("HTML", "html")]
 DEVICES = [("📱 XTEINK", "x4_crosspoint"), ("💻 Generic", "generic")]
 
 USER_STATE = {}
+_STATE_LOCK = threading.Lock()
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+
+@dp.error()
+async def global_error_handler(event: types.ErrorEvent):
+    log.exception("Unhandled exception in handler: %s", event.exception)
+    try:
+        if event.update.message:
+            await event.update.message.answer("⚠️ Произошла ошибка. Попробуйте /start.")
+        elif event.update.callback_query:
+            await event.update.callback_query.message.answer("⚠️ Произошла ошибка. Попробуйте /start.")
+    except Exception:
+        pass
+
+
+def _state_get(uid):
+    with _STATE_LOCK:
+        return USER_STATE.get(uid, {}).copy()
+
+
+def _state_set(uid, val):
+    with _STATE_LOCK:
+        USER_STATE[uid] = val
+
+
+def _state_pop(uid):
+    with _STATE_LOCK:
+        USER_STATE.pop(uid, None)
 
 
 def _allowed(uid: int) -> bool:
@@ -150,7 +179,8 @@ async def handle_text(m: types.Message):
         st["chapters"] = chapters
         st["step"] = "run"
         await m.answer("⏳ Начинаю скачивание... Это может занять несколько минут.")
-        outcome = await asyncio.get_event_loop().run_in_executor(None, _do_download, uid)
+        loop = asyncio.get_event_loop()
+        outcome = await loop.run_in_executor(None, _do_download, uid, m, loop)
         await _deliver(m, outcome)
         USER_STATE.pop(uid, None)
         return
@@ -295,8 +325,9 @@ async def _deliver(m: types.Message, outcome: str):
         await m.answer(outcome)
 
 
-def _do_download(uid: int) -> str:
-    st = USER_STATE.get(uid, {})
+def _do_download(uid: int, m: types.Message = None, loop=None) -> str:
+    with _STATE_LOCK:
+        st = USER_STATE.get(uid, {}).copy()
     slug = st.get("slug")
     if not slug:
         return "❌ Нет ссылки. Начни заново."
@@ -304,7 +335,34 @@ def _do_download(uid: int) -> str:
     dev = st.get("device", "generic")
     branch_id = st.get("branch_id")
     chapters = st.get("chapters", "ALL")
+    # validate branch_id against loaded branches
+    branches = st.get("branches", {})
+    if branch_id is not None and branch_id != "ALL" and branch_id not in branches:
+        log.warning("invalid branch_id %s, falling back to None", branch_id)
+        branch_id = None
+    # human-readable selection summary
+    if branch_id and branch_id in branches:
+        team_name = branches[branch_id].get("name", branch_id)
+    elif branch_id is None and branches:
+        team_name = "все команды"
+    else:
+        team_name = "—"
+    if chapters == "ALL":
+        rng = "все главы"
+    elif isinstance(chapters, list):
+        nums = [c.get("number") for c in chapters if isinstance(c, dict)]
+        rng = f"главы {nums[0]}-{nums[-1]}" if nums else "выбранный диапазон"
+    else:
+        rng = "выбранный диапазон"
     log.info("download start uid=%s slug=%s fmt=%s dev=%s branch=%s ch=%s", uid, slug, fmt, dev, branch_id, chapters)
+
+    def _edit(text):
+        if m is not None and loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(m.edit_text(text, parse_mode="HTML"), loop)
+            except Exception:
+                pass
+
     task_id = f"tg_{uid}_{int(time.time()*1000)}"
     body = {
         "slug": slug,
@@ -323,7 +381,9 @@ def _do_download(uid: int) -> str:
             "created_at": time.time(),
         }
     threading.Thread(target=run_download_task, args=(task_id, body), daemon=True).start()
+    _edit(f"⏳ <b>{team_name}</b> | {rng}\nПодготовка...")
     deadline = time.time() + 1800
+    last_pct = -1
     while time.time() < deadline:
         with tasks_lock:
             t = tasks.get(task_id)
@@ -345,6 +405,10 @@ def _do_download(uid: int) -> str:
             if size <= TELEGRAM_DOC_LIMIT:
                 return f"__FILE__:{file_name}"
             return f"✅ Готово: {file_name} ({size//1024//1024} MB)\n(>50MB, качай через веб: {PUBLIC_BASE})"
+        pct = t.get("progress", 0)
+        if pct != last_pct:
+            last_pct = pct
+            _edit(f"⏳ <b>{team_name}</b> | {rng}\nПрогресс: {pct}%")
         time.sleep(5)
     log.warning("download timeout uid=%s", uid)
     return "⏱️ Таймаут (>30 мин)."

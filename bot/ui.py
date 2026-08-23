@@ -110,10 +110,14 @@ def _dev_kb():
 
 
 def _team_kb(branches):
-    # branches: dict branch_id -> {name, chapter_count, team_names}
+    # branches: dict branch_id -> {name, chapter_count, team_names, range}
     rows = []
     for bid, info in branches.items():
-        label = f"{info['name']} ({info['chapter_count']})"
+        rng = info.get("range")
+        if rng:
+            label = f"{info['name']} ({rng[0]}–{rng[1]}, {info['chapter_count']} глав)"
+        else:
+            label = f"{info['name']} ({info['chapter_count']} глав)"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
     rows.append([InlineKeyboardButton(text="🌐 Все команды", callback_data="team:ALL")])
     rows.append([InlineKeyboardButton(text="❌ Скасувати", callback_data="act:cancel")])
@@ -287,6 +291,11 @@ async def choose_dev(c: CallbackQuery):
         info = normalize_novel_info(info)
         chapters = api.get_novel_chapters(slug)
         branches = get_formatted_branches_with_teams(info, chapters)
+        # compute chapter range (min-max number) per branch for UI
+        for bid in branches:
+            nums = [ch.get("number") for ch in chapters
+                    if any(b.get("branch_id") == bid for b in (ch.get("branches") or []))]
+            branches[bid]["range"] = (min(nums), max(nums)) if nums else None
         USER_STATE[uid]["total_chapters"] = len(chapters)
         USER_STATE[uid]["branches"] = branches
     except Exception as e:
@@ -331,8 +340,12 @@ async def choose_team(c: CallbackQuery):
     USER_STATE[uid]["branch_id"] = None if bid == "ALL" else bid
     USER_STATE[uid]["step"] = "range"
     total = USER_STATE[uid].get("total_chapters", 0)
-    await c.message.edit_text(
-        f"Команда: <b>{'все' if bid=='ALL' else USER_STATE[uid]['branches'].get(bid,{}).get('name',bid)}</b>\n"
+    br = USER_STATE[uid]["branches"].get(bid, {}) if bid != "ALL" else {}
+    rng = br.get("range")
+    rng_hint = f" (главы {rng[0]}–{rng[1]})" if rng else ""
+    name = "все команды" if bid == "ALL" else br.get("name", bid)
+    await c.message.answer(
+        f"Команда: <b>{name}</b>{rng_hint}\n"
         f"Введи диапазон глав: 'all' или '1-{total}'",
         parse_mode="HTML",
     )

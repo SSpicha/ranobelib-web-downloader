@@ -102,11 +102,11 @@ def _cancel_row():
 
 
 def _fmt_kb():
-    return _kb([[InlineKeyboardButton(text=t, callback_data=f"fmt:{v}") for t, v in FORMATS]] + _cancel_row())
+    return _kb([[InlineKeyboardButton(text=t, callback_data=f"fmt:{v}") for t, v in FORMATS]] + [_cancel_row()])
 
 
 def _dev_kb():
-    return _kb([[InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES]] + _cancel_row())
+    return _kb([[InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES]] + [_cancel_row()])
 
 
 def _team_kb(branches):
@@ -116,7 +116,7 @@ def _team_kb(branches):
         label = f"{info['name']} ({info['chapter_count']})"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
     rows.append([InlineKeyboardButton(text="🌐 Все команды", callback_data="team:ALL")])
-    rows.append(_cancel_row()[0])
+    rows.append([InlineKeyboardButton(text="❌ Скасувати", callback_data="act:cancel")])
     return _kb(rows)
 
 

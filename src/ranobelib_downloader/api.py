@@ -114,6 +114,22 @@ class RanobeLibAPI:
             raw_info = {}
         return normalize_novel_info(raw_info)
 
+    def search_novels(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Поиск новелл по каталогу RanobeLIB."""
+        query = (query or "").strip()
+        if not query:
+            return []
+        url = f"{self.api_url}?q={query}&site_id[]=3"
+        data = self.make_request(url, retry=False)
+        raw_items = data.get("data", [])
+        if not isinstance(raw_items, list):
+            return []
+        out = []
+        for item in raw_items[:limit]:
+            if isinstance(item, dict):
+                out.append(normalize_novel_info(item))
+        return out
+
     def get_novel_chapters(self, slug: str) -> List[Dict[str, Any]]:
         """Получение списка глав новеллы."""
         url = f"{self.api_url}{slug}/chapters"

@@ -123,9 +123,13 @@ def run_download_task(task_id: str, body: dict):
         if selected_raw:
             selected_ids = {str(c.get("id")) for c in selected_raw if c.get("id") is not None}
             selected_vol_num = {(str(c.get("volume", "")), str(c.get("number", ""))) for c in selected_raw}
+            # Bot passes volume="0" to mean "any volume" — match by chapter number alone.
+            any_volume_numbers = {str(c.get("number", "")) for c in selected_raw if str(c.get("volume", "")) == "0"}
             filtered_chapters = [
                 ch for ch in all_chapters
-                if str(ch.get("id")) in selected_ids or (str(ch.get("volume", "")), str(ch.get("number", ""))) in selected_vol_num
+                if str(ch.get("id")) in selected_ids
+                or (str(ch.get("volume", "")), str(ch.get("number", ""))) in selected_vol_num
+                or (any_volume_numbers and str(ch.get("number", "")) in any_volume_numbers)
             ]
             chapters_data = filtered_chapters if filtered_chapters else all_chapters
         else:

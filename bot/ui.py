@@ -467,9 +467,21 @@ async def _ensure_novel_loaded(uid: int, slug: str) -> bool:
         chapters = await asyncio.to_thread(api.get_novel_chapters, slug)
         branches = get_formatted_branches_with_teams(info, chapters)
         for bid in branches:
-            nums = [ch.get("number") for ch in chapters
-                    if any(b.get("branch_id") == bid for b in (ch.get("branches") or []))]
-            branches[bid]["range"] = (min(nums), max(nums)) if nums else None
+            nums = []
+            for ch in chapters:
+                for b in (ch.get("branches") or []):
+                    raw = b.get("branch_id") if isinstance(b, dict) else b
+                    if str(raw if raw is not None else "") == str(bid):
+                        try:
+                            nums.append(float(ch.get("number")))
+                        except (TypeError, ValueError):
+                            pass
+                        break
+            if nums:
+                _fmt = lambda n: str(int(n)) if n == int(n) else str(n)
+                branches[bid]["range"] = (_fmt(min(nums)), _fmt(max(nums)))
+            else:
+                branches[bid]["range"] = None
         st["total_chapters"] = len(chapters)
         st["branches"] = branches
         st["chapters_data"] = chapters
@@ -704,13 +716,12 @@ async def search_page_callback(c: CallbackQuery):
 
 @dp.message(Command("subscriptions"))
 @dp.message(Command("subs"))
-async def cmd_subscriptions(m: types.Message):
-    lang = _get_lang(m.from_user)
-    if not _allowed(m.from_user.id):
+async def _show_subs(msg: types.Message, uid: int, lang: str):
+    if not _allowed(uid):
         return
-    subs = get_user_subscriptions(m.from_user.id)
+    subs = get_user_subscriptions(uid)
     if not subs:
-        await m.answer(_t("subs_empty", lang))
+        await msg.answer(_t("subs_empty", lang))
         return
     lines = []
     rows = []
@@ -722,7 +733,12 @@ async def cmd_subscriptions(m: types.Message):
         ])
     rows.append(_cancel_row(lang))
     text = _t("subs_list", lang, items="\n".join(lines))
-    await m.answer(text, reply_markup=_kb(rows), parse_mode="HTML")
+    await msg.answer(text, reply_markup=_kb(rows), parse_mode="HTML")
+
+
+async def cmd_subscriptions(m: types.Message):
+    lang = _get_lang(m.from_user)
+    await _show_subs(m, m.from_user.id, lang)
 
 
 @dp.inline_query()
@@ -773,7 +789,7 @@ async def toggle_unsubscribe(c: CallbackQuery):
     slug = c.data.split(":", 1)[1]
     remove_subscription(c.from_user.id, slug)
     await c.answer(_t("sub_removed", lang, title=slug), show_alert=True)
-    await cmd_subscriptions(c.message)
+    await _show_subs(c.message, c.from_user.id, lang)
 
 
 @dp.callback_query(F.data.startswith("sel_slug:"))
@@ -791,7 +807,10 @@ async def select_searched_slug(c: CallbackQuery):
         await _safe_edit(c, _t("novel_load_err", lang, err=_t("err_load", lang)))
         await c.answer()
         return
-    st = USER_STATE[uid]
+    st = USER_STATE.get(uid)
+    if not st:
+        await c.answer()
+        return
     cover = (st.get("novel_info") or {}).get("cover")
     if isinstance(cover, dict):
         cover = cover.get("default") or cover.get("thumbnail")
@@ -811,7 +830,9 @@ async def navigate_back(c: CallbackQuery):
     lang = _get_lang(c.from_user)
     uid = c.from_user.id
     target = c.data.split(":", 1)[1]
-    st = USER_STATE.get(uid) or {}
+    st = USER_STATE.get(uid) or get_user_state(uid) or {}
+    if uid not in USER_STATE and get_user_state(uid):
+        USER_STATE[uid] = st
 
     if target == "fmt":
         st["step"] = "fmt"
@@ -889,6 +910,11 @@ async def handle_text(m: types.Message):
         return
     uid = m.from_user.id
     st = USER_STATE.get(uid) or get_user_state(uid) or {}
+    # Rehydrate DB-backed state into the in-memory cache so subsequent
+    # callbacks (e.g. range -> download) can read it. Only do this when the
+    # state actually came from the DB (not an empty {} for a fresh user).
+    if uid not in USER_STATE and get_user_state(uid):
+        USER_STATE[uid] = st
 
     # step: waiting for chapter range
     if st.get("step") == "range":
@@ -926,7 +952,10 @@ async def handle_text(m: types.Message):
             save_user_state(uid, None)
             await m.answer(_t("novel_load_err", lang, err=_t("err_load", lang)))
             return
-        st = USER_STATE[uid]
+        st = USER_STATE.get(uid)
+        if not st:
+            await m.answer(_t("novel_load_err", lang, err=_t("err_load", lang)))
+            return
         cover = (st.get("novel_info") or {}).get("cover")
         if isinstance(cover, dict):
             cover = cover.get("default") or cover.get("thumbnail")
@@ -989,7 +1018,7 @@ async def act_menu(c: CallbackQuery):
         await c.message.answer(_t("ask_search", lang), parse_mode="HTML")
         await c.answer()
     elif action == "subs":
-        await cmd_subscriptions(c.message)
+        await _show_subs(c.message, c.from_user.id, lang)
         await c.answer()
     elif action == "settings":
         st = get_user_settings(c.from_user.id)
@@ -1429,7 +1458,13 @@ async def main():
     # polling the same token; that must be enforced at the deployment layer.
     # Override the lock port via BOT_LOCK_PORT if you run multiple distinct bots
     # on the same host.
-    _lock_port = int(os.environ.get("BOT_LOCK_PORT", "8765"))
+    try:
+        _lock_port = int(os.environ.get("BOT_LOCK_PORT", "8765"))
+        if not (1 <= _lock_port <= 65535):
+            raise ValueError()
+    except (ValueError, TypeError):
+        log.warning("Invalid BOT_LOCK_PORT, using 8765")
+        _lock_port = 8765
     _instance_lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         _instance_lock.bind(("127.0.0.1", _lock_port))
@@ -1452,20 +1487,14 @@ async def main():
 
     # Cancel the background subscription-checker task on shutdown so it doesn't
     # use a closed session or emit "Task was destroyed but pending" warnings.
-    _sub_task = None
-
-    def _launch_sub():
-        global _sub_task
-        _sub_task = asyncio.create_task(_subscription_checker_loop())
-
-    _launch_sub()
+    _sub_task = asyncio.create_task(_subscription_checker_loop())
 
     async def _on_shutdown(**kwargs):
         if _sub_task is not None:
             _sub_task.cancel()
             try:
                 await _sub_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
 
     dp.shutdown.register(_on_shutdown)

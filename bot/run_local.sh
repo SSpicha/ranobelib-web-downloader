@@ -10,9 +10,11 @@ set -e
 cd "$(dirname "$0")/.."   # project root (where src/ and bot/ live)
 
 # --- kill any running bot/ui.py instance (single-instance enforcement) ---
-# Windows (git-bash / MSYS): query PIDs by command line via wmic, then kill.
+# Windows (git-bash / MSYS): list python processes via wmic, filter by command
+# line in bash (avoids the quoted-WHERE mangling that breaks on Win11).
 if command -v cmd.exe >/dev/null 2>&1; then
-  pids=$(cmd.exe /c "wmic process where \"name='python.exe' and commandline like '%bot/ui.py%'\" get processid" 2>/dev/null | grep -Eo '[0-9]+' || true)
+  pids=$(cmd.exe /c "wmic process where name='python.exe' get processid,commandline" 2>/dev/null \
+         | tr -d '\r' | grep -E "python(\.exe)?\"? +.*bot/ui\.py" | grep -Eo '[0-9]+ *$' | tr -d ' ' || true)
   for p in $pids; do
     taskkill /F /PID "$p" >/dev/null 2>&1 || true
   done

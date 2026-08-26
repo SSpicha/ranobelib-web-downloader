@@ -82,6 +82,30 @@ IMAGE_MODES = [
     ("🚫 Без картинок", "no_images"),
 ]
 
+# Per-language labels for stored enum values (avoid mixing languages in UI text).
+IMG_LABELS = {
+    "uk": {"images": "🖼️ Кольорові", "grayscale": "🔳 Ч/Б (e-Ink)", "no_images": "🚫 Без картинок"},
+    "ru": {"images": "🖼️ Цветные", "grayscale": "🔳 Ч/Б (e-Ink)", "no_images": "🚫 Без картинок"},
+    "en": {"images": "🖼️ Color", "grayscale": "🔳 Grayscale (e-Ink)", "no_images": "🚫 No images"},
+}
+STATUS_LABELS = {
+    "uk": {2: "🔵 Завершено", 1: "🟢 Триває"},
+    "ru": {2: "🔵 Завершено", 1: "🟢 Продолжается"},
+    "en": {2: "🔵 Completed", 1: "🟢 Ongoing"},
+}
+
+
+def _img_label(mode: str, lang: str = "uk") -> str:
+    return IMG_LABELS.get(lang, IMG_LABELS["uk"]).get(mode, mode)
+
+
+def _status_label(status_id, lang: str = "uk") -> str:
+    try:
+        sid = int(status_id)
+    except (TypeError, ValueError):
+        sid = None
+    return STATUS_LABELS.get(lang, STATUS_LABELS["uk"]).get(sid, "🟢 Триває")
+
 USER_STATE = {}
 _STATE_LOCK = threading.Lock()
 
@@ -342,7 +366,7 @@ def _fmt_text(lang: str, st: dict) -> str:
     if info:
         title = info.get("rus_name") or info.get("eng_name") or st.get("slug", "")
         rating = info.get("rating", {}).get("average") or "—"
-        status_str = "🔵 Завершено" if info.get("status", {}).get("id") == 2 else "🟢 Триває"
+        status_str = _status_label(info.get("status", {}).get("id"), lang)
         summary = (info.get("summary") or "").strip()
         summary = summary[:500] if summary else "—"
         return _t(
@@ -442,7 +466,7 @@ def _settings_kb(uid: int, lang: str = "uk"):
     st = get_user_settings(uid)
     fmt_label = f"📄 Формат: {st.get('fmt', 'epub').upper()}"
     dev_label = f"📱 Пристрій: {st.get('device', 'generic')}"
-    img_label = f"🖼️ Зображення: {st.get('images_mode', 'images')}"
+    img_label = f"🖼️ Зображення: {_img_label(st.get('images_mode', 'images'), lang)}"
     lang_label = f"🌐 Мова: {lang.upper()}"
 
     rows = [
@@ -731,7 +755,7 @@ async def navigate_back(c: CallbackQuery):
         st["step"] = "team"
         save_user_state(uid, st)
         branches = st.get("branches", {})
-        await _safe_edit(c, _t("ask_team", lang, img=st.get("images_mode", "images")), reply_markup=_team_kb(branches, lang))
+        await _safe_edit(c, _t("ask_team", lang, img=_img_label(st.get("images_mode", "images"), lang)), reply_markup=_team_kb(branches, lang))
     await c.answer()
 
 
@@ -767,7 +791,7 @@ async def toggle_setting(c: CallbackQuery):
     token_str = "✅ Налаштовано" if st.get("token") else "❌ Не налаштовано (/login)"
     await _safe_edit(
         c,
-        _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=st.get('images_mode', 'images'), lang=lang, token_status=token_str),
+        _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
         reply_markup=_settings_kb(uid, lang),
     )
     await c.answer()
@@ -881,7 +905,7 @@ async def act_menu(c: CallbackQuery):
         st = get_user_settings(c.from_user.id)
         token_str = "✅ Налаштовано" if st.get("token") else "❌ Не налаштовано (/login)"
         await c.message.answer(
-            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=st.get('images_mode', 'images'), lang=lang, token_status=token_str),
+            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
             reply_markup=_settings_kb(c.from_user.id, lang),
             parse_mode="HTML",
         )
@@ -951,6 +975,7 @@ async def choose_img(c: CallbackQuery):
 
     branches = st.get("branches", {})
     info = st.get("novel_info", {})
+    slug = st.get("slug", "")
 
     if not branches:
         USER_STATE[uid]["branch_id"] = None
@@ -967,9 +992,9 @@ async def choose_img(c: CallbackQuery):
     cover = (info.get("cover") or {}).get("default") or (info.get("cover") or {}).get("thumbnail")
     title = info.get("rus_name") or info.get("eng_name") or USER_STATE[uid]["slug"]
     rating = info.get("rating", {}).get("average") or "—"
-    status_str = "🔵 Завершено" if info.get("status", {}).get("id") == 2 else "🟢 Триває"
+    status_str = _status_label(info.get("status", {}).get("id"), lang)
 
-    cap = f"📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status_str}\n" + _t("ask_team", lang, img=USER_STATE[uid]['images_mode'])
+    cap = f"📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status_str}\n" + _t("ask_team", lang, img=_img_label(USER_STATE[uid]['images_mode'], lang))
 
     team_kb = _team_kb(branches, lang, back_step="img")
     team_kb.inline_keyboard.insert(0, [InlineKeyboardButton(text="📌 Підписатися на новелу", callback_data=f"sub:{slug}")])

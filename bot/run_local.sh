@@ -10,12 +10,15 @@ set -e
 cd "$(dirname "$0")/.."   # project root (where src/ and bot/ live)
 
 # --- kill any running bot/ui.py instance (single-instance enforcement) ---
-# Windows (git-bash / MSYS): use taskkill filtered by command line.
+# Windows (git-bash / MSYS): query PIDs by command line via wmic, then kill.
 if command -v cmd.exe >/dev/null 2>&1; then
-  cmd.exe /c "taskkill /F /FI \"IMAGENAME eq python.exe\" /FI \"COMMANDLINE eq *bot/ui.py*\" " >/dev/null 2>&1 || true
+  pids=$(cmd.exe /c "wmic process where \"name='python.exe' and commandline like '%bot/ui.py%'\" get processid" 2>/dev/null | grep -Eo '[0-9]+' || true)
+  for p in $pids; do
+    taskkill /F /PID "$p" >/dev/null 2>&1 || true
+  done
 fi
-# Linux / Oracle: pkill by script path.
-pkill -f "bot/ui.py" >/dev/null 2>&1 || true
+# Linux / Oracle: pkill by interpreter+script path (anchored to avoid editors/grep).
+pkill -f "[p]ython.*bot/ui.py" >/dev/null 2>&1 || true
 # Give the OS a moment to release the polling slot.
 sleep 1
 
@@ -26,5 +29,11 @@ if [ -f bot/.env ]; then
   set +a
 fi
 
+# Pick the venv interpreter (Windows vs Linux layout).
+PY="./.venv/Scripts/python.exe"
+if [ -x ./.venv/bin/python ]; then
+  PY="./.venv/bin/python"
+fi
+
 echo "Starting bot (local)..."
-exec ./.venv/Scripts/python.exe bot/ui.py
+exec "$PY" bot/ui.py

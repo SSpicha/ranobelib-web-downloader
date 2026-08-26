@@ -105,7 +105,8 @@ def _status_label(status_id, lang: str = "uk") -> str:
         sid = int(status_id)
     except (TypeError, ValueError):
         sid = None
-    return STATUS_LABELS.get(lang, STATUS_LABELS["uk"]).get(sid, "🟢 Триває")
+    d = STATUS_LABELS.get(lang, STATUS_LABELS["uk"])
+    return d.get(sid, d.get(1, "🟢 Триває"))
 
 
 DEV_LABELS = {
@@ -481,14 +482,14 @@ async def _ensure_novel_loaded(uid: int, slug: str) -> bool:
 
 
 def _dev_kb(lang: str = "uk", back_step: str = "fmt"):
-    r1 = [InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES[:2]]
-    r2 = [InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES[2:]]
+    r1 = [InlineKeyboardButton(text=_dev_label(v, lang), callback_data=f"dev:{v}") for t, v in DEVICES[:2]]
+    r2 = [InlineKeyboardButton(text=_dev_label(v, lang), callback_data=f"dev:{v}") for t, v in DEVICES[2:]]
     rows = [r1, r2, _cancel_row(lang, back_step)]
     return _kb(rows)
 
 
 def _img_kb(lang: str = "uk", back_step: str = "dev"):
-    rows = [[InlineKeyboardButton(text=t, callback_data=f"img:{v}") for t, v in IMAGE_MODES]]
+    rows = [[InlineKeyboardButton(text=_img_label(v, lang), callback_data=f"img:{v}") for t, v in IMAGE_MODES]]
     rows.append(_cancel_row(lang, back_step))
     return _kb(rows)
 
@@ -763,7 +764,7 @@ async def toggle_subscribe(c: CallbackQuery):
     if add_subscription(c.from_user.id, slug, title, last_ch):
         await c.answer(_t("sub_added", lang, title=title), show_alert=True)
     else:
-        await c.answer("⚠️ Помилка", show_alert=True)
+        await c.answer(_t("err_general", lang), show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("unsub:"))
@@ -784,7 +785,12 @@ async def select_searched_slug(c: CallbackQuery):
 
     USER_STATE[uid] = {"step": "fmt", "url": url, "slug": slug, "lang": lang}
     save_user_state(uid, USER_STATE[uid])
-    await _ensure_novel_loaded(uid, slug)
+    if not await _ensure_novel_loaded(uid, slug):
+        USER_STATE.pop(uid, None)
+        save_user_state(uid, None)
+        await _safe_edit(c, _t("novel_load_err", lang, err=_t("err_load", lang)))
+        await c.answer()
+        return
     st = USER_STATE[uid]
     cover = (st.get("novel_info") or {}).get("cover")
     if isinstance(cover, dict):
@@ -829,7 +835,7 @@ async def navigate_back(c: CallbackQuery):
     elif target == "img":
         st["step"] = "img"
         save_user_state(uid, st)
-        await _safe_edit(c, _t("ask_img", lang, device=st.get("device", "generic")), reply_markup=_img_kb(lang))
+        await _safe_edit(c, _t("ask_img", lang, device=_dev_label(st.get("device", "generic"), lang)), reply_markup=_img_kb(lang))
     elif target == "team":
         st["step"] = "team"
         save_user_state(uid, st)
@@ -915,6 +921,11 @@ async def handle_text(m: types.Message):
         USER_STATE[uid] = {"step": "fmt", "url": text, "slug": slug, "lang": lang}
         save_user_state(uid, USER_STATE[uid])
         ok = await _ensure_novel_loaded(uid, slug)
+        if not ok:
+            USER_STATE.pop(uid, None)
+            save_user_state(uid, None)
+            await m.answer(_t("novel_load_err", lang, err=_t("err_load", lang)))
+            return
         st = USER_STATE[uid]
         cover = (st.get("novel_info") or {}).get("cover")
         if isinstance(cover, dict):
@@ -1360,6 +1371,13 @@ async def _subscription_checker_loop():
             await asyncio.sleep(60)
 
 
+@dp.callback_query(F.data == "noop")
+async def _noop_handler(c: types.CallbackQuery):
+    # Placeholder buttons (multi-team header, search page indicator) — just
+    # acknowledge so Telegram doesn't show a perpetual "loading" state.
+    await c.answer()
+
+
 async def main():
     init_db()
     if not BOT_TOKEN:
@@ -1403,21 +1421,26 @@ async def main():
         await bot.set_my_commands(_COMMANDS["uk"])
     except Exception as e:
         log.warning("set_my_commands (default) failed: %s", e)
-    asyncio.create_task(_subscription_checker_loop())
     # Single-instance guard: bind a localhost socket for the process lifetime.
-    # A second launch will fail to bind and exit immediately instead of
-    # spawning a duplicate that fights this instance (TelegramConflictError).
+    # A second launch (same netns) fails to bind and exits immediately instead
+    # of spawning a duplicate that fights this instance (TelegramConflictError).
+    # NOTE: this guard is per-network-namespace only — it does NOT stop two real
+    # deployments (e.g. a compose container + a host dev launch) from both
+    # polling the same token; that must be enforced at the deployment layer.
+    # Override the lock port via BOT_LOCK_PORT if you run multiple distinct bots
+    # on the same host.
+    _lock_port = int(os.environ.get("BOT_LOCK_PORT", "8765"))
     _instance_lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        _instance_lock.bind(("127.0.0.1", 8765))
+        _instance_lock.bind(("127.0.0.1", _lock_port))
         _instance_lock.listen(1)
     except OSError:
-        log.error("Another bot instance is already running (port 8765). Exiting.")
+        log.error("Another bot instance is already running (port %s). Exiting.", _lock_port)
         sys.exit(1)
 
     # Clear any lingering getUpdates session left by a killed predecessor so
-    # we don't fight it for the polling slot (drop_pending_updates=True tears
-    # down the old session on Telegram's side before we start).
+    # we don't fight it for the polling slot. (aiogram retries internally on
+    # conflict, but this drops the queued updates up front.)
     async def _on_startup(**kwargs):
         b = kwargs.get("bot") or bot
         try:
@@ -1426,6 +1449,26 @@ async def main():
             log.warning("delete_webhook failed: %s", e)
 
     dp.startup.register(_on_startup)
+
+    # Cancel the background subscription-checker task on shutdown so it doesn't
+    # use a closed session or emit "Task was destroyed but pending" warnings.
+    _sub_task = None
+
+    def _launch_sub():
+        global _sub_task
+        _sub_task = asyncio.create_task(_subscription_checker_loop())
+
+    _launch_sub()
+
+    async def _on_shutdown(**kwargs):
+        if _sub_task is not None:
+            _sub_task.cancel()
+            try:
+                await _sub_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    dp.shutdown.register(_on_shutdown)
     try:
         await dp.start_polling(bot, drop_pending_updates=True)
     finally:

@@ -3,3 +3,5 @@ requests>=2.31.0
 Pillow>=10.0.0
 beautifulsoup4>=4.12.0
 ebooklib>=0.18
+# web_app is imported by bot/ui.py for run_download_task; it pulls fastapi at top level.
+fastapi==0.111.0

@@ -1,0 +1,29 @@
+# Koyeb deployment manifest for ranobelib-web
+# Free tier: 2 vCPU / 512MB RAM, no sleep.
+# Deploy: Koyeb dashboard -> Create App -> GitHub -> select repo -> use this file
+# or: koyeb apps create ranobelib-web --git github.com/SSpicha/ranobelib-web-downloader --git-branch main --docker dockerfile=Dockerfile --ports 8080:http --env KEEPALIVE=1 --regions fra
+
+name: ranobelib-web
+services:
+  - name: web
+    type: web
+    docker:
+      dockerfile: Dockerfile
+    ports:
+      - port: 8080
+        type: http
+        # Koyeb routes public traffic here; no separate healthCheckPath needed,
+        # but /api/health exists and returns 200 if you want to wire a check.
+    env:
+      - key: KEEPALIVE
+        value: "1"
+      - key: KEEPALIVE_INTERVAL
+        value: "600"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    # Free tier instance type (2 vCPU / 512MB)
+    instance: free
+    # Auto-deploy on push to main
+    git:
+      branch: main
+      deploy_on_push: true

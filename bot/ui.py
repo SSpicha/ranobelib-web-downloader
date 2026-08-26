@@ -347,12 +347,23 @@ def _img_kb(lang: str = "uk", back_step: str = "dev"):
 def _team_kb(branches, lang: str = "uk", back_step: str = "img"):
     rows = []
     for bid, info in branches.items():
-        rng = info.get("range")
-        if rng:
-            label = f"{info['name']} ({rng[0]}–{rng[1]}, {info['chapter_count']} глав)"
+        team_names = info.get("team_names") or []
+        if len(team_names) > 1:
+            # Multi-team branch: one button per translation team.
+            rows.append([InlineKeyboardButton(
+                text=f"📚 {info['name']}", callback_data="noop")])
+            for ti, tname in enumerate(team_names):
+                cnt = info.get("chapter_count", 0)
+                rows.append([InlineKeyboardButton(
+                    text=f"  • {tname} ({cnt} глав)",
+                    callback_data=f"team:{bid}:{ti}")])
         else:
-            label = f"{info['name']} ({info['chapter_count']} глав)"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
+            rng = info.get("range")
+            if rng:
+                label = f"{info['name']} ({rng[0]}–{rng[1]}, {info['chapter_count']} глав)"
+            else:
+                label = f"{info['name']} ({info['chapter_count']} глав)"
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
     rows.append([InlineKeyboardButton(text=_t("btn_all_teams", lang), callback_data="team:ALL")])
     rows.append(_cancel_row(lang, back_step))
     return _kb(rows)
@@ -907,10 +918,22 @@ async def choose_team(c: CallbackQuery):
     if uid not in USER_STATE or USER_STATE[uid].get("step") != "team":
         await c.answer(_t("invalid_url", lang), show_alert=True)
         return
-    bid = c.data.split(":", 1)[1]
+    parts = c.data.split(":", 2)
+    bid = parts[1]
     if bid == "ALL":
         USER_STATE[uid]["branch_id"] = None
         USER_STATE[uid]["team_name"] = None
+    elif len(parts) == 3:
+        # Multi-team branch: a specific team was chosen by index.
+        idx = parts[2]
+        branch_info = USER_STATE[uid]["branches"].get(bid, {})
+        team_names = branch_info.get("team_names") or []
+        try:
+            tname = team_names[int(idx)]
+        except (ValueError, IndexError):
+            tname = branch_info.get("name")
+        USER_STATE[uid]["branch_id"] = bid
+        USER_STATE[uid]["team_name"] = tname
     else:
         USER_STATE[uid]["branch_id"] = bid
         USER_STATE[uid]["team_name"] = USER_STATE[uid]["branches"].get(bid, {}).get("name")

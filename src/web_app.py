@@ -241,7 +241,11 @@ def run_download_task(task_id: str, body: dict):
                         total = tasks[task_id]["total_chapters"] or 1
                         current = tasks[task_id]["processed_chapters"]
                         tasks[task_id]["progress"] = min(95, int(5 + (current / total) * 90))
+
                 return res
+
+        image_handler = ImageHandler(api)
+        creator = WebProgressCreator(api, parser, image_handler)
 
         split_mode = str(body.get("split_mode", "none")).lower()
         chunk_size = int(body.get("chunk_size", 150))

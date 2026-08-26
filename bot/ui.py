@@ -49,6 +49,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, CallbackQuery,
     WebAppInfo, InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
+    BotCommand,
 )
 from aiogram import F
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
@@ -117,7 +118,7 @@ I18N = {
                     "Команди: /start /search /subscriptions /login <token> /cancel /help",
         "access_denied": "⛔ Доступ заборонено.",
         "err_general": "⚠️ Сталася помилка. Спробуйте /start.",
-        "ask_url": "📥 Надішли посилання на новелу з ranobelib.me або використай /search <назва>",
+        "ask_url": "📥 Надішли посилання на новелу з ranobelib.me або використай <code>/search назва</code>",
         "ask_search": "🔍 Введи назву новели для пошуку (наприклад: <code>/search Спадкоємець</code>):",
         "search_results": "🔍 Результати пошуку за запитом <b>{query}</b> (Стор. {page}/{total_pages}):",
         "search_empty": "❌ Нічого не знайдено за запитом <b>{query}</b>.",
@@ -177,7 +178,7 @@ I18N = {
                     "Команды: /start /search /subscriptions /login <token> /cancel /help",
         "access_denied": "⛔ Доступ запрещен.",
         "err_general": "⚠️ Произошла ошибка. Попробуйте /start.",
-        "ask_url": "📥 Пришли ссылку на новеллу с ranobelib.me или используй /search <название>",
+        "ask_url": "📥 Пришли ссылку на новеллу с ranobelib.me или используй <code>/search название</code>",
         "ask_search": "🔍 Введи название новеллы для поиска (например: <code>/search Наследие</code>):",
         "search_results": "🔍 Результаты поиска по запросу <b>{query}</b> (Стр. {page}/{total_pages}):",
         "search_empty": "❌ Ничего не найдено по запросу <b>{query}</b>.",
@@ -237,7 +238,7 @@ I18N = {
                     "Commands: /start /search /subscriptions /login <token> /cancel /help",
         "access_denied": "⛔ Access denied.",
         "err_general": "⚠️ An error occurred. Please try /start.",
-        "ask_url": "📥 Please send a novel URL from ranobelib.me or use /search <query>",
+        "ask_url": "📥 Please send a novel URL from ranobelib.me or use <code>/search query</code>",
         "ask_search": "🔍 Enter novel title to search (e.g. <code>/search Lord</code>):",
         "search_results": "🔍 Search results for <b>{query}</b> (Page {page}/{total_pages}):",
         "search_empty": "❌ Nothing found for <b>{query}</b>.",
@@ -868,7 +869,7 @@ async def act_menu(c: CallbackQuery):
         await c.answer()
         return
     if action == "download":
-        await c.message.answer(_t("ask_url", lang))
+        await c.message.answer(_t("ask_url", lang), parse_mode="HTML")
         await c.answer()
     elif action == "search":
         await c.message.answer(_t("ask_search", lang), parse_mode="HTML")
@@ -1255,6 +1256,43 @@ async def main():
         print("ERROR: TELEGRAM_BOT_TOKEN not set")
         return
     log.info("Starting Telegram bot polling...")
+    # Register /commands menu (localized). Shown when user types "/".
+    _COMMANDS = {
+        "uk": [
+            BotCommand(command="start", description="Головне меню"),
+            BotCommand(command="search", description="Пошук новели за назвою"),
+            BotCommand(command="subscriptions", description="Мої підписки"),
+            BotCommand(command="login", description="Токен RanobeLIB (доступ до глав)"),
+            BotCommand(command="cancel", description="Скасувати поточну дію"),
+            BotCommand(command="help", description="Довідка та список команд"),
+        ],
+        "ru": [
+            BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="search", description="Поиск новеллы по названию"),
+            BotCommand(command="subscriptions", description="Мои подписки"),
+            BotCommand(command="login", description="Токен RanobeLIB (доступ к главам)"),
+            BotCommand(command="cancel", description="Отменить текущее действие"),
+            BotCommand(command="help", description="Справка и список команд"),
+        ],
+        "en": [
+            BotCommand(command="start", description="Main menu"),
+            BotCommand(command="search", description="Search novel by title"),
+            BotCommand(command="subscriptions", description="My subscriptions"),
+            BotCommand(command="login", description="RanobeLIB token (chapter access)"),
+            BotCommand(command="cancel", description="Cancel current action"),
+            BotCommand(command="help", description="Help and command list"),
+        ],
+    }
+    for lang_code, cmds in _COMMANDS.items():
+        try:
+            await bot.set_my_commands(cmds, language_code=lang_code)
+        except Exception as e:
+            log.warning("set_my_commands failed for %s: %s", lang_code, e)
+    # Default (fallback) commands for any other locale.
+    try:
+        await bot.set_my_commands(_COMMANDS["uk"])
+    except Exception as e:
+        log.warning("set_my_commands (default) failed: %s", e)
     asyncio.create_task(_subscription_checker_loop())
     await dp.start_polling(bot)
 

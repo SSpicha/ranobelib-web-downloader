@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RanobeLIB Web Downloader</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
     color-scheme: light dark;
@@ -791,6 +792,22 @@ $('brand').addEventListener('click', () => location.reload());
 const savedLang = (() => { try { return localStorage.getItem('ranobelib_web_lang'); } catch (e) { return null; } })();
 applyLang(savedLang === 'uk' ? 'uk' : 'en');
 loadOpts();
+
+if (window.Telegram && window.Telegram.WebApp) {
+  try {
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+    if (tg.themeParams) {
+      const tp = tg.themeParams;
+      if (tp.bg_color) document.documentElement.style.setProperty('--bg', tp.bg_color);
+      if (tp.secondary_bg_color) document.documentElement.style.setProperty('--panel', tp.secondary_bg_color);
+      if (tp.text_color) document.documentElement.style.setProperty('--text', tp.text_color);
+      if (tp.button_color) document.documentElement.style.setProperty('--accent', tp.button_color);
+      if (tp.hint_color) document.documentElement.style.setProperty('--muted', tp.hint_color);
+    }
+  } catch (e) { console.log('Telegram WebApp init:', e); }
+}
 </script>
 </body>
 </html>

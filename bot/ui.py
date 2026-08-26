@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Telegram bot UI for ranobelib-web downloader — full flow with search, multi-volume split, subscriptions & i18n.
+Telegram bot UI for ranobelib-web downloader — full flow with search, multi-volume split, subscriptions, interactive settings, navigation & i18n.
 
 Flow:
   /start -> main menu [Download] [Search] [Subscriptions] [Settings] [Web App]
-  /search <query> -> list of novel matches with one-tap select
+  /search <query> -> paginated list of novel matches with one-tap select
   /subscriptions -> list user subscriptions with unsubscribe option
   /login <token> -> set RanobeLIB access token for restricted chapters
   send URL -> ask FORMAT [EPUB][FB2][TXT][HTML]
@@ -14,6 +14,7 @@ Flow:
             -> ask RANGE (presets, per-volume split, 150-ch chunks, or text)
             -> run download with choices, deliver file(s)
 
+Includes navigation back buttons [⬅️ Назад] and interactive settings menu.
 State & settings persisted in SQLite database (user_data/bot_users.db).
 """
 import os
@@ -23,6 +24,7 @@ from pathlib import Path
 import time
 import threading
 import asyncio
+import math
 
 # --- logging ---
 logging.basicConfig(
@@ -98,6 +100,7 @@ I18N = {
         "btn_subs": "📌 Мої підписки",
         "btn_settings": "⚙️ Налаштування",
         "btn_cancel": "❌ Скасувати",
+        "btn_back": "⬅️ Назад",
         "btn_app": "🚀 Відкрити Web App",
         "btn_all_teams": "🌐 Усі команди",
         "btn_range_all": "📚 Усі глави (одним файлом)",
@@ -115,7 +118,7 @@ I18N = {
         "err_general": "⚠️ Сталася помилка. Спробуйте /start.",
         "ask_url": "📥 Надішли посилання на новелу з ranobelib.me або використай /search <назва>",
         "ask_search": "🔍 Введи назву новели для пошуку (наприклад: <code>/search Спадкоємець</code>):",
-        "search_results": "🔍 Результати пошуку за запитом <b>{query}</b>:",
+        "search_results": "🔍 Результати пошуку за запитом <b>{query}</b> (Стор. {page}/{total_pages}):",
         "search_empty": "❌ Нічого не знайдено за запитом <b>{query}</b>.",
         "ask_fmt": "📕 <b>{title}</b>\nОбери формат:",
         "ask_dev": "Формат: <b>{fmt}</b>\nОбери пристрій:",
@@ -131,7 +134,12 @@ I18N = {
         "file_too_large": "✅ Готово: {file_name} ({size} MB)\n⚠️ Файл >50MB. Обери розбиття «📦 По томах» або режим «Без картинок».",
         "file_too_large_url": "✅ Готово: {file_name} ({size} MB)\n🔗 {url}",
         "download_timeout": "⏱️ Таймаут (>30 хв).",
-        "settings_info": "⚙️ Налаштування за замовчуванням:\nФормат: <b>{fmt}</b>\nПристрій: <b>{dev}</b>\nЗображення: <b>{img}</b>\nТокен авторизації: <b>{token_status}</b>",
+        "settings_info": "⚙️ <b>Інтерактивне Меню Налаштувань:</b>\nНатисніть на кнопку, щоб змінити значення за замовчуванням.\n\n"
+                         "📄 Формат: <b>{fmt}</b>\n"
+                         "📱 Пристрій: <b>{dev}</b>\n"
+                         "🖼️ Зображення: <b>{img}</b>\n"
+                         "🌐 Мова: <b>{lang}</b>\n"
+                         "🔑 Токен: <b>{token_status}</b>",
         "sub_added": "📌 Успішно підписано на новелу <b>{title}</b>! Ви отримуватимете сповіщення про нові глави.",
         "sub_removed": "🔕 Підписку на <b>{title}</b> скасовано.",
         "subs_list": "📌 <b>Ваші підписки:</b>\n\n{items}",
@@ -151,6 +159,7 @@ I18N = {
         "btn_subs": "📌 Мои подписки",
         "btn_settings": "⚙️ Настройки",
         "btn_cancel": "❌ Отмена",
+        "btn_back": "⬅️ Назад",
         "btn_app": "🚀 Открыть Web App",
         "btn_all_teams": "🌐 Все команды",
         "btn_range_all": "📚 Все главы (одним файлом)",
@@ -168,7 +177,7 @@ I18N = {
         "err_general": "⚠️ Произошла ошибка. Попробуйте /start.",
         "ask_url": "📥 Пришли ссылку на новеллу с ranobelib.me или используй /search <название>",
         "ask_search": "🔍 Введи название новеллы для поиска (например: <code>/search Наследие</code>):",
-        "search_results": "🔍 Результаты поиска по запросу <b>{query}</b>:",
+        "search_results": "🔍 Результаты поиска по запросу <b>{query}</b> (Стр. {page}/{total_pages}):",
         "search_empty": "❌ Ничего не найдено по запросу <b>{query}</b>.",
         "ask_fmt": "📕 <b>{title}</b>\nВыбери формат:",
         "ask_dev": "Формат: <b>{fmt}</b>\nВыбери устройство:",
@@ -184,7 +193,12 @@ I18N = {
         "file_too_large": "✅ Готово: {file_name} ({size} MB)\n⚠️ Файл >50MB. Выбери разбиение «📦 По томам» или режим «Без картинок».",
         "file_too_large_url": "✅ Готово: {file_name} ({size} MB)\n🔗 {url}",
         "download_timeout": "⏱️ Таймаут (>30 мин).",
-        "settings_info": "⚙️ Настройки по умолчанию:\nФормат: <b>{fmt}</b>\nУстройство: <b>{dev}</b>\nИзображения: <b>{img}</b>\nТокен авторизации: <b>{token_status}</b>",
+        "settings_info": "⚙️ <b>Интерактивное Меню Настроек:</b>\nНажмите на кнопку, чтобы изменить значение по умолчанию.\n\n"
+                         "📄 Формат: <b>{fmt}</b>\n"
+                         "📱 Устройство: <b>{dev}</b>\n"
+                         "🖼️ Изображения: <b>{img}</b>\n"
+                         "🌐 Язык: <b>{lang}</b>\n"
+                         "🔑 Токен: <b>{token_status}</b>",
         "sub_added": "📌 Успешно подписаны на новеллу <b>{title}</b>! Вы будете получать уведомления о новых главах.",
         "sub_removed": "🔕 Подписка на <b>{title}</b> отменена.",
         "subs_list": "📌 <b>Ваши подписки:</b>\n\n{items}",
@@ -204,6 +218,7 @@ I18N = {
         "btn_subs": "📌 My Subscriptions",
         "btn_settings": "⚙️ Settings",
         "btn_cancel": "❌ Cancel",
+        "btn_back": "⬅️ Back",
         "btn_app": "🚀 Open Web App",
         "btn_all_teams": "🌐 All teams",
         "btn_range_all": "📚 All chapters (single file)",
@@ -221,7 +236,7 @@ I18N = {
         "err_general": "⚠️ An error occurred. Please try /start.",
         "ask_url": "📥 Please send a novel URL from ranobelib.me or use /search <query>",
         "ask_search": "🔍 Enter novel title to search (e.g. <code>/search Lord</code>):",
-        "search_results": "🔍 Search results for <b>{query}</b>:",
+        "search_results": "🔍 Search results for <b>{query}</b> (Page {page}/{total_pages}):",
         "search_empty": "❌ Nothing found for <b>{query}</b>.",
         "ask_fmt": "📕 <b>{title}</b>\nSelect format:",
         "ask_dev": "Format: <b>{fmt}</b>\nSelect device:",
@@ -237,7 +252,12 @@ I18N = {
         "file_too_large": "✅ Done: {file_name} ({size} MB)\n⚠️ File >50MB. Choose '📦 Split by Volumes' or 'No images' mode.",
         "file_too_large_url": "✅ Done: {file_name} ({size} MB)\n🔗 {url}",
         "download_timeout": "⏱️ Timeout (>30 min).",
-        "settings_info": "⚙️ Default settings:\nFormat: <b>{fmt}</b>\nDevice: <b>{dev}</b>\nImages: <b>{img}</b>\nAuth Token: <b>{token_status}</b>",
+        "settings_info": "⚙️ <b>Interactive Settings Menu:</b>\nTap a button to toggle your default options.\n\n"
+                         "📄 Format: <b>{fmt}</b>\n"
+                         "📱 Device: <b>{dev}</b>\n"
+                         "🖼️ Images: <b>{img}</b>\n"
+                         "🌐 Language: <b>{lang}</b>\n"
+                         "🔑 Auth Token: <b>{token_status}</b>",
         "sub_added": "📌 Successfully subscribed to <b>{title}</b>! You will receive notifications for new chapters.",
         "sub_removed": "🔕 Subscription to <b>{title}</b> cancelled.",
         "subs_list": "📌 <b>Your Subscriptions:</b>\n\n{items}",
@@ -297,30 +317,34 @@ def _kb(rows):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _cancel_row(lang: str = "uk"):
-    return [InlineKeyboardButton(text=_t("btn_cancel", lang), callback_data="act:cancel")]
+def _cancel_row(lang: str = "uk", back_step: str = None):
+    row = []
+    if back_step:
+        row.append(InlineKeyboardButton(text=_t("btn_back", lang), callback_data=f"nav_back:{back_step}"))
+    row.append(InlineKeyboardButton(text=_t("btn_cancel", lang), callback_data="act:cancel"))
+    return row
 
 
-def _fmt_kb(lang: str = "uk"):
+def _fmt_kb(lang: str = "uk", back_step: str = None):
     rows = [[InlineKeyboardButton(text=t, callback_data=f"fmt:{v}") for t, v in FORMATS]]
-    rows.append(_cancel_row(lang))
+    rows.append(_cancel_row(lang, back_step))
     return _kb(rows)
 
 
-def _dev_kb(lang: str = "uk"):
+def _dev_kb(lang: str = "uk", back_step: str = "fmt"):
     r1 = [InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES[:2]]
     r2 = [InlineKeyboardButton(text=t, callback_data=f"dev:{v}") for t, v in DEVICES[2:]]
-    rows = [r1, r2, _cancel_row(lang)]
+    rows = [r1, r2, _cancel_row(lang, back_step)]
     return _kb(rows)
 
 
-def _img_kb(lang: str = "uk"):
+def _img_kb(lang: str = "uk", back_step: str = "dev"):
     rows = [[InlineKeyboardButton(text=t, callback_data=f"img:{v}") for t, v in IMAGE_MODES]]
-    rows.append(_cancel_row(lang))
+    rows.append(_cancel_row(lang, back_step))
     return _kb(rows)
 
 
-def _team_kb(branches, lang: str = "uk"):
+def _team_kb(branches, lang: str = "uk", back_step: str = "img"):
     rows = []
     for bid, info in branches.items():
         rng = info.get("range")
@@ -330,11 +354,11 @@ def _team_kb(branches, lang: str = "uk"):
             label = f"{info['name']} ({info['chapter_count']} глав)"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
     rows.append([InlineKeyboardButton(text=_t("btn_all_teams", lang), callback_data="team:ALL")])
-    rows.append(_cancel_row(lang))
+    rows.append(_cancel_row(lang, back_step))
     return _kb(rows)
 
 
-def _range_kb(total: int, lang: str = "uk"):
+def _range_kb(total: int, lang: str = "uk", back_step: str = "team"):
     rows = [
         [InlineKeyboardButton(text=_t("btn_range_all", lang), callback_data="rng:ALL")],
         [
@@ -352,7 +376,24 @@ def _range_kb(total: int, lang: str = "uk"):
             InlineKeyboardButton(text="📖 1-200", callback_data="rng:1-200"),
             InlineKeyboardButton(text=f"📖 100-{total}", callback_data=f"rng:100-{total}"),
         ])
-    rows.append(_cancel_row(lang))
+    rows.append(_cancel_row(lang, back_step))
+    return _kb(rows)
+
+
+def _settings_kb(uid: int, lang: str = "uk"):
+    st = get_user_settings(uid)
+    fmt_label = f"📄 Формат: {st.get('fmt', 'epub').upper()}"
+    dev_label = f"📱 Пристрій: {st.get('device', 'generic')}"
+    img_label = f"🖼️ Зображення: {st.get('images_mode', 'images')}"
+    lang_label = f"🌐 Мова: {lang.upper()}"
+
+    rows = [
+        [InlineKeyboardButton(text=fmt_label, callback_data="toggle_set:fmt")],
+        [InlineKeyboardButton(text=dev_label, callback_data="toggle_set:dev")],
+        [InlineKeyboardButton(text=img_label, callback_data="toggle_set:img")],
+        [InlineKeyboardButton(text=lang_label, callback_data="toggle_set:lang")],
+        _cancel_row(lang),
+    ]
     return _kb(rows)
 
 
@@ -446,25 +487,57 @@ async def cmd_search(m: types.Message, command: CommandObject):
         await m.answer(_t("ask_search", lang), parse_mode="HTML")
         return
 
-    await m.answer(f"⏳ Пошук: <b>{query}</b>...", parse_mode="HTML")
-    results = await asyncio.to_thread(api.search_novels, query, 8)
+    await _render_search_page(m, query, page=1, lang=lang)
+
+
+async def _render_search_page(m_or_c, query: str, page: int = 1, lang: str = "uk"):
+    limit = 5
+    results = await asyncio.to_thread(api.search_novels, query, 15)
     if not results:
-        await m.answer(_t("search_empty", lang, query=query), parse_mode="HTML")
+        msg = _t("search_empty", lang, query=query)
+        if isinstance(m_or_c, CallbackQuery):
+            await _safe_edit(m_or_c, msg)
+        else:
+            await m_or_c.answer(msg, parse_mode="HTML")
         return
 
+    total_pages = max(1, math.ceil(len(results) / limit))
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * limit
+    page_items = results[start_idx:start_idx + limit]
+
     rows = []
-    for item in results:
+    for item in page_items:
         title = item.get("rus_name") or item.get("eng_name") or item.get("slug")
         slug = item.get("slug")
         if slug:
             rows.append([InlineKeyboardButton(text=f"📕 {title}", callback_data=f"sel_slug:{slug}")])
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"spg:{page-1}:{query[:20]}"))
+    nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"spg:{page+1}:{query[:20]}"))
+    rows.append(nav_row)
     rows.append(_cancel_row(lang))
 
-    await m.answer(
-        _t("search_results", lang, query=query),
-        reply_markup=_kb(rows),
-        parse_mode="HTML",
-    )
+    text = _t("search_results", lang, query=query, page=page, total_pages=total_pages)
+    if isinstance(m_or_c, CallbackQuery):
+        await _safe_edit(m_or_c, text, reply_markup=_kb(rows))
+    else:
+        await m_or_c.answer(text, reply_markup=_kb(rows), parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("spg:"))
+async def search_page_callback(c: CallbackQuery):
+    lang = _get_lang(c.from_user)
+    parts = c.data.split(":", 2)
+    page = int(parts[1])
+    query = parts[2]
+    await _render_search_page(c, query, page=page, lang=lang)
+    await c.answer()
 
 
 @dp.message(Command("subscriptions"))
@@ -559,6 +632,71 @@ async def select_searched_slug(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("nav_back:"))
+async def navigate_back(c: CallbackQuery):
+    lang = _get_lang(c.from_user)
+    uid = c.from_user.id
+    target = c.data.split(":", 1)[1]
+    st = USER_STATE.get(uid) or {}
+
+    if target == "fmt":
+        st["step"] = "fmt"
+        save_user_state(uid, st)
+        await _safe_edit(c, _t("ask_fmt", lang, title=st.get("slug", "")), reply_markup=_fmt_kb(lang))
+    elif target == "dev":
+        st["step"] = "dev"
+        save_user_state(uid, st)
+        await _safe_edit(c, _t("ask_dev", lang, fmt=st.get("fmt", "epub").upper()), reply_markup=_dev_kb(lang))
+    elif target == "img":
+        st["step"] = "img"
+        save_user_state(uid, st)
+        await _safe_edit(c, _t("ask_img", lang, device=st.get("device", "generic")), reply_markup=_img_kb(lang))
+    elif target == "team":
+        st["step"] = "team"
+        save_user_state(uid, st)
+        branches = st.get("branches", {})
+        await _safe_edit(c, _t("ask_team", lang, img=st.get("images_mode", "images")), reply_markup=_team_kb(branches, lang))
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("toggle_set:"))
+async def toggle_setting(c: CallbackQuery):
+    uid = c.from_user.id
+    lang = _get_lang(c.from_user)
+    setting_type = c.data.split(":", 1)[1]
+    st = get_user_settings(uid)
+
+    if setting_type == "fmt":
+        fmt_list = ["epub", "fb2", "txt", "html"]
+        curr = st.get("fmt", "epub")
+        next_val = fmt_list[(fmt_list.index(curr) + 1) % len(fmt_list)] if curr in fmt_list else "epub"
+        st["fmt"] = next_val
+    elif setting_type == "dev":
+        dev_list = ["x4_crosspoint", "kindle", "phone", "generic"]
+        curr = st.get("device", "generic")
+        next_val = dev_list[(dev_list.index(curr) + 1) % len(dev_list)] if curr in dev_list else "generic"
+        st["device"] = next_val
+    elif setting_type == "img":
+        img_list = ["images", "grayscale", "no_images"]
+        curr = st.get("images_mode", "images")
+        next_val = img_list[(img_list.index(curr) + 1) % len(img_list)] if curr in img_list else "images"
+        st["images_mode"] = next_val
+    elif setting_type == "lang":
+        lang_list = ["uk", "ru", "en"]
+        next_val = lang_list[(lang_list.index(lang) + 1) % len(lang_list)] if lang in lang_list else "uk"
+        st["lang"] = next_val
+        lang = next_val
+
+    save_user_settings(uid, st)
+    token_str = "✅ Налаштовано" if st.get("token") else "❌ Не налаштовано (/login)"
+    await _safe_edit(
+        c,
+        _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=st.get('images_mode', 'images'), lang=lang, token_status=token_str),
+        reply_markup=_settings_kb(uid, lang),
+    )
+    await c.answer()
+
+
 @dp.message(F.text)
 async def handle_text(m: types.Message):
     lang = _get_lang(m.from_user)
@@ -599,18 +737,7 @@ async def handle_text(m: types.Message):
         save_user_state(uid, USER_STATE[uid])
         await m.answer(_t("ask_fmt", lang, title=slug), reply_markup=_fmt_kb(lang), parse_mode="HTML")
     else:
-        results = await asyncio.to_thread(api.search_novels, text, 5)
-        if results:
-            rows = []
-            for item in results:
-                title = item.get("rus_name") or item.get("eng_name") or item.get("slug")
-                slug = item.get("slug")
-                if slug:
-                    rows.append([InlineKeyboardButton(text=f"📕 {title}", callback_data=f"sel_slug:{slug}")])
-            rows.append(_cancel_row(lang))
-            await m.answer(_t("search_results", lang, query=text), reply_markup=_kb(rows), parse_mode="HTML")
-        else:
-            await m.answer(_t("ask_url", lang))
+        await _render_search_page(m, text, page=1, lang=lang)
 
 
 def _parse_range(raw: str, total: int):
@@ -662,7 +789,8 @@ async def act_menu(c: CallbackQuery):
         st = get_user_settings(c.from_user.id)
         token_str = "✅ Налаштовано" if st.get("token") else "❌ Не налаштовано (/login)"
         await c.message.answer(
-            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=st.get('images_mode', 'images'), token_status=token_str),
+            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=st.get('images_mode', 'images'), lang=lang, token_status=token_str),
+            reply_markup=_settings_kb(c.from_user.id, lang),
             parse_mode="HTML",
         )
         await c.answer()
@@ -682,7 +810,7 @@ async def choose_fmt(c: CallbackQuery):
     await _safe_edit(
         c,
         _t("ask_dev", lang, fmt=USER_STATE[uid]['fmt'].upper()),
-        reply_markup=_dev_kb(lang),
+        reply_markup=_dev_kb(lang, back_step="fmt"),
     )
     await c.answer()
 
@@ -701,7 +829,7 @@ async def choose_dev(c: CallbackQuery):
     await _safe_edit(
         c,
         _t("ask_img", lang, device=USER_STATE[uid]['device']),
-        reply_markup=_img_kb(lang),
+        reply_markup=_img_kb(lang, back_step="dev"),
     )
     await c.answer()
 
@@ -747,17 +875,19 @@ async def choose_img(c: CallbackQuery):
         await _safe_edit(
             c,
             _t("ask_range", lang, team="—", rng_hint="", total=total),
-            reply_markup=_range_kb(total, lang),
+            reply_markup=_range_kb(total, lang, back_step="img"),
         )
         await c.answer()
         return
 
     cover = (info.get("cover") or {}).get("default") or (info.get("cover") or {}).get("thumbnail")
     title = info.get("rus_name") or info.get("eng_name") or USER_STATE[uid]["slug"]
-    cap = f"📕 <b>{title}</b>\n" + _t("ask_team", lang, img=USER_STATE[uid]['images_mode'])
+    rating = info.get("rating", {}).get("average") or "5.0"
+    status_str = "🔵 Завершено" if info.get("status", {}).get("id") == 2 else "🟢 Триває"
 
-    team_kb = _team_kb(branches, lang)
-    # Add subscribe button to team keyboard
+    cap = f"📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status_str}\n" + _t("ask_team", lang, img=USER_STATE[uid]['images_mode'])
+
+    team_kb = _team_kb(branches, lang, back_step="img")
     team_kb.inline_keyboard.insert(0, [InlineKeyboardButton(text="📌 Підписатися на новелу", callback_data=f"sub:{slug}")])
 
     try:
@@ -796,7 +926,7 @@ async def choose_team(c: CallbackQuery):
     await _safe_edit(
         c,
         _t("ask_range", lang, team=name, rng_hint=rng_hint, total=total),
-        reply_markup=_range_kb(total, lang),
+        reply_markup=_range_kb(total, lang, back_step="team"),
     )
     await c.answer()
 
@@ -993,12 +1123,11 @@ async def _subscription_checker_loop():
     log.info("Subscription checker loop started.")
     while True:
         try:
-            await asyncio.sleep(1800)  # 30 mins
+            await asyncio.sleep(1800)
             subs = get_all_subscriptions()
             if not subs or not bot:
                 continue
             log.info("Checking %d subscriptions...", len(subs))
-            # Group by slug to query RanobeLIB API efficiently
             by_slug = {}
             for s in subs:
                 by_slug.setdefault(s["slug"], []).append(s)

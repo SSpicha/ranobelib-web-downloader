@@ -19,6 +19,7 @@ State & settings persisted in SQLite database (user_data/bot_users.db).
 """
 import os
 import sys
+import socket
 import logging
 from pathlib import Path
 import time
@@ -106,6 +107,17 @@ def _status_label(status_id, lang: str = "uk") -> str:
         sid = None
     return STATUS_LABELS.get(lang, STATUS_LABELS["uk"]).get(sid, "🟢 Триває")
 
+
+DEV_LABELS = {
+    "uk": {"x4_crosspoint": "📱 XTEINK", "kindle": "📖 Kindle", "phone": "📱 Телефон/Планшет", "generic": "💻 Загальний"},
+    "ru": {"x4_crosspoint": "📱 XTEINK", "kindle": "📖 Kindle", "phone": "📱 Телефон/Планшет", "generic": "💻 Общий"},
+    "en": {"x4_crosspoint": "📱 XTEINK", "kindle": "📖 Kindle", "phone": "📱 Phone/Tablet", "generic": "💻 Generic"},
+}
+
+
+def _dev_label(slug: str, lang: str = "uk") -> str:
+    return DEV_LABELS.get(lang, DEV_LABELS["uk"]).get(slug, slug)
+
 USER_STATE = {}
 _STATE_LOCK = threading.Lock()
 
@@ -128,10 +140,28 @@ I18N = {
         "btn_cancel": "❌ Скасувати",
         "btn_back": "⬅️ Назад",
         "btn_app": "🚀 Відкрити Web App",
+        "set_fmt": "📄 Формат",
+        "set_dev": "📱 Пристрій",
+        "set_img": "🖼️ Зображення",
+        "set_lang": "🌐 Мова",
         "btn_all_teams": "🌐 Усі команди",
+        "ch_label": "{n} глава",
+        "ch_count": "{n} глав",
+        "rng_hint_tmpl": " (глави {a}–{b})",
+        "token_on": "✅ Налаштовано",
+        "token_off": "❌ Не налаштовано (/login)",
+        "btn_subscribe": "📌 Підписатися на новелу",
+        "err_load": "помилка завантаження",
         "btn_range_all": "📚 Усі глави (одним файлом)",
         "btn_split_vol": "📦 Розбити по томах",
         "btn_split_chunk": "📦 Розбити по 150 глав",
+        "rng_all_split": "Розбиття ({mode})",
+        "rng_chapters": "глави {a}-{b}",
+        "rng_selected": "вибраний діапазон",
+        "split_volume": "volume",
+        "split_chunk": "chunk",
+        "preparing": "Підготовка...",
+        "dl_error": "❌ Помилка: {err}",
         "cancel_msg": "❌ Дію скасовано. Надішли посилання, назву або скористайся /search.",
         "help_msg": "📖 Як користуватися:\n"
                     "1. Надішли посилання (ranobelib.me) або команду /search <назва>\n"
@@ -142,6 +172,7 @@ I18N = {
                     "Команди: /start /search /subscriptions /login <token> /cancel /help",
         "access_denied": "⛔ Доступ заборонено.",
         "err_general": "⚠️ Сталася помилка. Спробуйте /start.",
+        "err_unknown": "невідомо",
         "ask_url": "📥 Надішли посилання на новелу з ranobelib.me або використай <code>/search назва</code>",
         "ask_search": "🔍 Введи назву новели для пошуку (наприклад: <code>/search Спадкоємець</code>):",
         "search_results": "🔍 Результати пошуку за запитом <b>{query}</b> (Стор. {page}/{total_pages}):",
@@ -151,6 +182,8 @@ I18N = {
         "ask_dev": "Формат: <b>{fmt}</b>\nОбери пристрій:",
         "ask_img": "Пристрій: <b>{device}</b>\nОбери режим зображень:",
         "ask_team": "Режим зображень: <b>{img}</b>\nОбери команду (переклад):",
+        "rating_label": "Рейтинг",
+        "team_caption": "📕 <b>{title}</b>\n⭐ {rating_label}: <b>{rating}</b> | {status}\n{ask_team}",
         "ask_range": "Команда: <b>{team}</b>{rng_hint}\nВведи діапазон глав (наприклад '1-50') або натисни кнопку нижче (всього глав: {total}):",
         "invalid_url": "❌ Невірний формат посилання. Надішли посилання з ranobelib.me.",
         "invalid_range": "❌ Незрозумілий діапазон. Введи діапазон (напр. '1-50') або обрати кнопкою.",
@@ -169,6 +202,7 @@ I18N = {
                          "🔑 Токен: <b>{token_status}</b>",
         "sub_added": "📌 Успішно підписано на новелу <b>{title}</b>! Ви отримуватимете сповіщення про нові глави.",
         "sub_removed": "🔕 Підписку на <b>{title}</b> скасовано.",
+        "sub_notify": "🔔 <b>Нові глави!</b>\nНовела: <b>{title}</b>\nНова глава: {max_ch}",
         "subs_list": "📌 <b>Ваші підписки:</b>\n\n{items}",
         "subs_empty": "📌 У вас немає активних підписок. Щоб підписатися, шукайте новелу через /search.",
         "token_saved": "🔑 Токен авторизації успішно збережено!",
@@ -188,10 +222,28 @@ I18N = {
         "btn_cancel": "❌ Отмена",
         "btn_back": "⬅️ Назад",
         "btn_app": "🚀 Открыть Web App",
+        "set_fmt": "📄 Формат",
+        "set_dev": "📱 Устройство",
+        "set_img": "🖼️ Изображения",
+        "set_lang": "🌐 Язык",
         "btn_all_teams": "🌐 Все команды",
+        "ch_label": "{n} глава",
+        "ch_count": "{n} глав",
+        "rng_hint_tmpl": " (главы {a}–{b})",
+        "token_on": "✅ Настроено",
+        "token_off": "❌ Не настроено (/login)",
+        "btn_subscribe": "📌 Подписаться на новеллу",
+        "err_load": "ошибка загрузки",
         "btn_range_all": "📚 Все главы (одним файлом)",
         "btn_split_vol": "📦 Разбить по томам",
         "btn_split_chunk": "📦 Разбить по 150 глав",
+        "rng_all_split": "Разбиение ({mode})",
+        "rng_chapters": "главы {a}-{b}",
+        "rng_selected": "выбранный диапазон",
+        "split_volume": "volume",
+        "split_chunk": "chunk",
+        "preparing": "Подготовка...",
+        "dl_error": "❌ Ошибка: {err}",
         "cancel_msg": "❌ Действие отменено. Пришли ссылку, название или воспользуйся /search.",
         "help_msg": "📖 Как пользоваться:\n"
                     "1. Пришли ссылку (ranobelib.me) или команду /search <название>\n"
@@ -202,6 +254,7 @@ I18N = {
                     "Команды: /start /search /subscriptions /login <token> /cancel /help",
         "access_denied": "⛔ Доступ запрещен.",
         "err_general": "⚠️ Произошла ошибка. Попробуйте /start.",
+        "err_unknown": "неизвестно",
         "ask_url": "📥 Пришли ссылку на новеллу с ranobelib.me или используй <code>/search название</code>",
         "ask_search": "🔍 Введи название новеллы для поиска (например: <code>/search Наследие</code>):",
         "search_results": "🔍 Результаты поиска по запросу <b>{query}</b> (Стр. {page}/{total_pages}):",
@@ -211,6 +264,8 @@ I18N = {
         "ask_dev": "Формат: <b>{fmt}</b>\nВыбери устройство:",
         "ask_img": "Устройство: <b>{device}</b>\nВыбери режим изображений:",
         "ask_team": "Режим изображений: <b>{img}</b>\nВыбери команду (перевод):",
+        "rating_label": "Рейтинг",
+        "team_caption": "📕 <b>{title}</b>\n⭐ {rating_label}: <b>{rating}</b> | {status}\n{ask_team}",
         "ask_range": "Команда: <b>{team}</b>{rng_hint}\nВведи диапазон глав (например '1-50') или выбери кнопкой (всего глав: {total}):",
         "invalid_url": "❌ Неверный формат ссылки. Пришли ссылку с ranobelib.me.",
         "invalid_range": "❌ Не понял. Введи диапазон (напр. '1-50') или нажми кнопку.",
@@ -229,6 +284,7 @@ I18N = {
                          "🔑 Токен: <b>{token_status}</b>",
         "sub_added": "📌 Успешно подписаны на новеллу <b>{title}</b>! Вы будете получать уведомления о новых главах.",
         "sub_removed": "🔕 Подписка на <b>{title}</b> отменена.",
+        "sub_notify": "🔔 <b>Новые главы!</b>\nНовелла: <b>{title}</b>\nНовая глава: {max_ch}",
         "subs_list": "📌 <b>Ваши подписки:</b>\n\n{items}",
         "subs_empty": "📌 У вас нет активных подписок. Чтобы подписаться, ищите новеллу через /search.",
         "token_saved": "🔑 Токен авторизации успешно сохранен!",
@@ -248,10 +304,28 @@ I18N = {
         "btn_cancel": "❌ Cancel",
         "btn_back": "⬅️ Back",
         "btn_app": "🚀 Open Web App",
+        "set_fmt": "📄 Format",
+        "set_dev": "📱 Device",
+        "set_img": "🖼️ Images",
+        "set_lang": "🌐 Language",
         "btn_all_teams": "🌐 All teams",
+        "ch_label": "{n} chapter",
+        "ch_count": "{n} chapters",
+        "rng_hint_tmpl": " (chapters {a}–{b})",
+        "token_on": "✅ Set",
+        "token_off": "❌ Not set (/login)",
+        "btn_subscribe": "📌 Subscribe to novel",
+        "err_load": "load error",
         "btn_range_all": "📚 All chapters (single file)",
         "btn_split_vol": "📦 Split by Volumes",
         "btn_split_chunk": "📦 Split per 150 chapters",
+        "rng_all_split": "Split ({mode})",
+        "rng_chapters": "chapters {a}-{b}",
+        "rng_selected": "selected range",
+        "split_volume": "volume",
+        "split_chunk": "chunk",
+        "preparing": "Preparing...",
+        "dl_error": "❌ Error: {err}",
         "cancel_msg": "❌ Action cancelled. Send a URL, title or use /search.",
         "help_msg": "📖 How to use:\n"
                     "1. Send novel URL (ranobelib.me) or /search <query>\n"
@@ -262,6 +336,7 @@ I18N = {
                     "Commands: /start /search /subscriptions /login <token> /cancel /help",
         "access_denied": "⛔ Access denied.",
         "err_general": "⚠️ An error occurred. Please try /start.",
+        "err_unknown": "unknown",
         "ask_url": "📥 Please send a novel URL from ranobelib.me or use <code>/search query</code>",
         "ask_search": "🔍 Enter novel title to search (e.g. <code>/search Lord</code>):",
         "search_results": "🔍 Search results for <b>{query}</b> (Page {page}/{total_pages}):",
@@ -271,6 +346,8 @@ I18N = {
         "ask_dev": "Format: <b>{fmt}</b>\nSelect device:",
         "ask_img": "Device: <b>{device}</b>\nSelect image mode:",
         "ask_team": "Image mode: <b>{img}</b>\nSelect translation team:",
+        "rating_label": "Rating",
+        "team_caption": "📕 <b>{title}</b>\n⭐ {rating_label}: <b>{rating}</b> | {status}\n{ask_team}",
         "ask_range": "Team: <b>{team}</b>{rng_hint}\nEnter chapter range (e.g. '1-50') or choose a preset below (total: {total}):",
         "invalid_url": "❌ Invalid link format. Send a valid link from ranobelib.me.",
         "invalid_range": "❌ Invalid range. Type a range like '1-50' or tap a button.",
@@ -289,6 +366,7 @@ I18N = {
                          "🔑 Auth Token: <b>{token_status}</b>",
         "sub_added": "📌 Successfully subscribed to <b>{title}</b>! You will receive notifications for new chapters.",
         "sub_removed": "🔕 Subscription to <b>{title}</b> cancelled.",
+        "sub_notify": "🔔 <b>New chapters!</b>\nNovel: <b>{title}</b>\nNew chapter: {max_ch}",
         "subs_list": "📌 <b>Your Subscriptions:</b>\n\n{items}",
         "subs_empty": "📌 You have no active subscriptions. Use /search to find and subscribe to novels.",
         "token_saved": "🔑 Authorization token successfully saved!",
@@ -426,14 +504,15 @@ def _team_kb(branches, lang: str = "uk", back_step: str = "img"):
             for ti, tname in enumerate(team_names):
                 cnt = info.get("chapter_count", 0)
                 rows.append([InlineKeyboardButton(
-                    text=f"  • {tname} ({cnt} глав)",
+                    text=f"  • {tname} ({_t('ch_count', lang, n=cnt)})",
                     callback_data=f"team:{bid}:{ti}")])
         else:
             rng = info.get("range")
+            cc = info.get("chapter_count", 0)
             if rng:
-                label = f"{info['name']} ({rng[0]}–{rng[1]}, {info['chapter_count']} глав)"
+                label = f"{info['name']} ({rng[0]}–{rng[1]}, {_t('ch_count', lang, n=cc)})"
             else:
-                label = f"{info['name']} ({info['chapter_count']} глав)"
+                label = f"{info['name']} ({_t('ch_count', lang, n=cc)})"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"team:{bid}")])
     rows.append([InlineKeyboardButton(text=_t("btn_all_teams", lang), callback_data="team:ALL")])
     rows.append(_cancel_row(lang, back_step))
@@ -464,10 +543,10 @@ def _range_kb(total: int, lang: str = "uk", back_step: str = "team"):
 
 def _settings_kb(uid: int, lang: str = "uk"):
     st = get_user_settings(uid)
-    fmt_label = f"📄 Формат: {st.get('fmt', 'epub').upper()}"
-    dev_label = f"📱 Пристрій: {st.get('device', 'generic')}"
-    img_label = f"🖼️ Зображення: {_img_label(st.get('images_mode', 'images'), lang)}"
-    lang_label = f"🌐 Мова: {lang.upper()}"
+    fmt_label = f"{_t('set_fmt', lang)}: {st.get('fmt', 'epub').upper()}"
+    dev_label = f"{_t('set_dev', lang)}: {_dev_label(st.get('device', 'generic'), lang)}"
+    img_label = f"{_t('set_img', lang)}: {_img_label(st.get('images_mode', 'images'), lang)}"
+    lang_label = f"{_t('set_lang', lang)}: {lang.upper()}"
 
     rows = [
         [InlineKeyboardButton(text=fmt_label, callback_data="toggle_set:fmt")],
@@ -635,7 +714,7 @@ async def cmd_subscriptions(m: types.Message):
     lines = []
     rows = []
     for s in subs:
-        lines.append(f"• <b>{s['title']}</b> (глава {s['last_chapter_number']})")
+        lines.append(f"• <b>{s['title']}</b> ({_t('ch_label', lang, n=s['last_chapter_number'])})")
         rows.append([
             InlineKeyboardButton(text=f"📖 {s['title'][:20]}...", callback_data=f"sel_slug:{s['slug']}"),
             InlineKeyboardButton(text="🔕", callback_data=f"unsub:{s['slug']}"),
@@ -788,10 +867,10 @@ async def toggle_setting(c: CallbackQuery):
         lang = next_val
 
     save_user_settings(uid, st)
-    token_str = "✅ Налаштовано" if st.get("token") else "❌ Не налаштовано (/login)"
+    token_str = _t("token_on", lang) if st.get("token") else _t("token_off", lang)
     await _safe_edit(
         c,
-        _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
+        _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=_dev_label(st.get('device', 'generic'), lang), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
         reply_markup=_settings_kb(uid, lang),
     )
     await c.answer()
@@ -903,9 +982,9 @@ async def act_menu(c: CallbackQuery):
         await c.answer()
     elif action == "settings":
         st = get_user_settings(c.from_user.id)
-        token_str = "✅ Налаштовано" if st.get("token") else "❌ Не налаштовано (/login)"
+        token_str = _t("token_on", lang) if st.get("token") else _t("token_off", lang)
         await c.message.answer(
-            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=st.get('device', 'generic'), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
+            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=_dev_label(st.get('device', 'generic'), lang), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
             reply_markup=_settings_kb(c.from_user.id, lang),
             parse_mode="HTML",
         )
@@ -944,7 +1023,7 @@ async def choose_dev(c: CallbackQuery):
 
     await _safe_edit(
         c,
-        _t("ask_img", lang, device=USER_STATE[uid]['device']),
+        _t("ask_img", lang, device=_dev_label(USER_STATE[uid]['device'], lang)),
         reply_markup=_img_kb(lang, back_step="dev"),
     )
     await c.answer()
@@ -968,7 +1047,7 @@ async def choose_img(c: CallbackQuery):
         if not await _ensure_novel_loaded(uid, st["slug"]):
             USER_STATE.pop(uid, None)
             save_user_state(uid, None)
-            await _safe_edit(c, _t("novel_load_err", lang, err="load failed"))
+            await _safe_edit(c, _t("novel_load_err", lang, err=_t("err_load", lang)))
             await c.answer()
             return
         st = USER_STATE[uid]
@@ -994,10 +1073,14 @@ async def choose_img(c: CallbackQuery):
     rating = info.get("rating", {}).get("average") or "—"
     status_str = _status_label(info.get("status", {}).get("id"), lang)
 
-    cap = f"📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status_str}\n" + _t("ask_team", lang, img=_img_label(USER_STATE[uid]['images_mode'], lang))
+    cap = _t(
+        "team_caption", lang,
+        title=escape(title), rating=rating, status=status_str,
+        ask_team=_t("ask_team", lang, img=_img_label(USER_STATE[uid]['images_mode'], lang)),
+    )
 
     team_kb = _team_kb(branches, lang, back_step="img")
-    team_kb.inline_keyboard.insert(0, [InlineKeyboardButton(text="📌 Підписатися на новелу", callback_data=f"sub:{slug}")])
+    team_kb.inline_keyboard.insert(0, [InlineKeyboardButton(text=_t("btn_subscribe", lang), callback_data=f"sub:{slug}")])
 
     try:
         if cover:
@@ -1041,7 +1124,7 @@ async def choose_team(c: CallbackQuery):
     total = USER_STATE[uid].get("total_chapters", 0)
     br = USER_STATE[uid]["branches"].get(bid, {}) if bid != "ALL" else {}
     rng = br.get("range")
-    rng_hint = f" (главы {rng[0]}–{rng[1]})" if rng else ""
+    rng_hint = _t("rng_hint_tmpl", lang, a=rng[0], b=rng[1]) if rng else ""
     name = _t("btn_all_teams", lang) if bid == "ALL" else br.get("name", bid)
 
     await _safe_edit(
@@ -1135,12 +1218,13 @@ def _do_download(uid: int, m: types.Message = None, loop=None, lang: str = "uk")
         team_name = "—"
 
     if chapters == "ALL":
-        rng = _t("btn_range_all", lang) if split_mode == "none" else f"Розбиття ({split_mode})"
+        split_label = _t("split_volume", lang) if split_mode == "volume" else _t("split_chunk", lang)
+        rng = _t("rng_all_split", lang, mode=split_label) if split_mode != "none" else _t("btn_range_all", lang)
     elif isinstance(chapters, list):
         nums = [c.get("number") for c in chapters if isinstance(c, dict)]
-        rng = f"глави {nums[0]}-{nums[-1]}" if nums else "выбранный диапазон"
+        rng = _t("rng_chapters", lang, a=nums[0], b=nums[-1]) if nums else _t("rng_selected", lang)
     else:
-        rng = "выбранный диапазон"
+        rng = _t("rng_selected", lang)
 
     log.info("download start uid=%s slug=%s fmt=%s dev=%s img=%s split=%s branch=%s", uid, slug, fmt, dev, img_mode, split_mode, branch_id)
 
@@ -1200,7 +1284,7 @@ def _do_download(uid: int, m: types.Message = None, loop=None, lang: str = "uk")
             "created_at": time.time(),
         }
     threading.Thread(target=run_download_task, args=(task_id, body), daemon=True).start()
-    _edit(f"⏳ <b>{team_name}</b> | {rng}\nПодготовка...")
+    _edit(f"⏳ <b>{team_name}</b> | {rng}\n{_t('preparing', lang)}")
     deadline = time.time() + 1800
     last_pct = -1
 
@@ -1211,7 +1295,7 @@ def _do_download(uid: int, m: types.Message = None, loop=None, lang: str = "uk")
             break
         if t.get("status") == "error":
             log.error("download error uid=%s: %s", uid, t.get("error"))
-            return f"❌ Ошибка: {t.get('error', 'неизвестно')}"
+            return _t("dl_error", lang, err=t.get("error", _t("err_unknown", lang)))
         if t.get("status") == "done":
             file_list = t.get("file_list") or []
             file_name = t.get("file")
@@ -1263,7 +1347,8 @@ async def _subscription_checker_loop():
                         last_ch = float(sub.get("last_chapter_number", 0))
                         if max_ch > last_ch:
                             update_subscription_ch(sub["user_id"], slug, max_ch)
-                            msg = f"🔔 <b>Нові глави!</b>\nНовела: <b>{sub['title']}</b>\nНова глава: {max_ch}"
+                            sub_lang = get_user_settings(sub["user_id"]).get("lang", "uk")
+                            msg = _t("sub_notify", sub_lang, title=sub["title"], max_ch=max_ch)
                             try:
                                 await bot.send_message(sub["user_id"], msg, parse_mode="HTML")
                             except Exception as ex:
@@ -1319,7 +1404,35 @@ async def main():
     except Exception as e:
         log.warning("set_my_commands (default) failed: %s", e)
     asyncio.create_task(_subscription_checker_loop())
-    await dp.start_polling(bot)
+    # Single-instance guard: bind a localhost socket for the process lifetime.
+    # A second launch will fail to bind and exit immediately instead of
+    # spawning a duplicate that fights this instance (TelegramConflictError).
+    _instance_lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _instance_lock.bind(("127.0.0.1", 8765))
+        _instance_lock.listen(1)
+    except OSError:
+        log.error("Another bot instance is already running (port 8765). Exiting.")
+        sys.exit(1)
+
+    # Clear any lingering getUpdates session left by a killed predecessor so
+    # we don't fight it for the polling slot (drop_pending_updates=True tears
+    # down the old session on Telegram's side before we start).
+    async def _on_startup(**kwargs):
+        b = kwargs.get("bot") or bot
+        try:
+            await b.delete_webhook(drop_pending_updates=True)
+        except Exception as e:
+            log.warning("delete_webhook failed: %s", e)
+
+    dp.startup.register(_on_startup)
+    try:
+        await dp.start_polling(bot, drop_pending_updates=True)
+    finally:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -243,17 +243,46 @@ def run_download_task(task_id: str, body: dict):
                         tasks[task_id]["progress"] = min(95, int(5 + (current / total) * 90))
                 return res
 
-        image_handler = ImageHandler(api)
-        creator = WebProgressCreator(api, parser, image_handler)
+        split_mode = str(body.get("split_mode", "none")).lower()
+        chunk_size = int(body.get("chunk_size", 150))
 
-        created_file_path = creator.create(novel_info, chapters_data, selected_branch_id=branch_id)
-        file_name = os.path.basename(created_file_path)
+        if split_mode in ("volume", "chunk") and len(chapters_data) > 1:
+            chapter_groups = []
+            if split_mode == "volume":
+                vol_map = {}
+                for ch in chapters_data:
+                    v = str(ch.get("volume", "0"))
+                    vol_map.setdefault(v, []).append(ch)
+                for v_name, ch_list in vol_map.items():
+                    chapter_groups.append((f"Том {v_name}", ch_list))
+            elif split_mode == "chunk":
+                for i in range(0, len(chapters_data), chunk_size):
+                    subset = chapters_data[i:i + chunk_size]
+                    nums = [c.get("number") for c in subset if c.get("number") is not None]
+                    label = f"Глав {nums[0]}-{nums[-1]}" if nums else f"Частина {i//chunk_size + 1}"
+                    chapter_groups.append((label, subset))
+
+            created_files = []
+            for label, sub_chapters in chapter_groups:
+                info_copy = novel_info.copy()
+                title_orig = info_copy.get("rus_name") or info_copy.get("eng_name") or slug
+                info_copy["rus_name"] = f"{title_orig} ({label})"
+                fpath = creator.create(info_copy, sub_chapters, selected_branch_id=branch_id)
+                created_files.append(os.path.basename(fpath))
+
+            file_name = created_files[0] if created_files else ""
+            file_list = created_files
+        else:
+            created_file_path = creator.create(novel_info, chapters_data, selected_branch_id=branch_id)
+            file_name = os.path.basename(created_file_path)
+            file_list = [file_name]
 
         with tasks_lock:
             if task_id in tasks:
                 tasks[task_id]["status"] = "done"
                 tasks[task_id]["progress"] = 100
                 tasks[task_id]["file"] = file_name
+                tasks[task_id]["file_list"] = file_list
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -25,6 +25,7 @@ import time
 import threading
 import asyncio
 import math
+from html import escape
 
 # --- logging ---
 logging.basicConfig(
@@ -121,6 +122,7 @@ I18N = {
         "search_results": "🔍 Результати пошуку за запитом <b>{query}</b> (Стор. {page}/{total_pages}):",
         "search_empty": "❌ Нічого не знайдено за запитом <b>{query}</b>.",
         "ask_fmt": "📕 <b>{title}</b>\nОбери формат:",
+        "fmt_prompt": "📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status}\n📝 {summary}\n\nОбери формат:",
         "ask_dev": "Формат: <b>{fmt}</b>\nОбери пристрій:",
         "ask_img": "Пристрій: <b>{device}</b>\nОбери режим зображень:",
         "ask_team": "Режим зображень: <b>{img}</b>\nОбери команду (переклад):",
@@ -180,6 +182,7 @@ I18N = {
         "search_results": "🔍 Результаты поиска по запросу <b>{query}</b> (Стр. {page}/{total_pages}):",
         "search_empty": "❌ Ничего не найдено по запросу <b>{query}</b>.",
         "ask_fmt": "📕 <b>{title}</b>\nВыбери формат:",
+        "fmt_prompt": "📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status}\n📝 {summary}\n\nВыбери формат:",
         "ask_dev": "Формат: <b>{fmt}</b>\nВыбери устройство:",
         "ask_img": "Устройство: <b>{device}</b>\nВыбери режим изображений:",
         "ask_team": "Режим изображений: <b>{img}</b>\nВыбери команду (перевод):",
@@ -239,6 +242,7 @@ I18N = {
         "search_results": "🔍 Search results for <b>{query}</b> (Page {page}/{total_pages}):",
         "search_empty": "❌ Nothing found for <b>{query}</b>.",
         "ask_fmt": "📕 <b>{title}</b>\nSelect format:",
+        "fmt_prompt": "📕 <b>{title}</b>\n⭐ Rating: <b>{rating}</b> | {status}\n📝 {summary}\n\nSelect format:",
         "ask_dev": "Format: <b>{fmt}</b>\nSelect device:",
         "ask_img": "Device: <b>{device}</b>\nSelect image mode:",
         "ask_team": "Image mode: <b>{img}</b>\nSelect translation team:",
@@ -329,6 +333,48 @@ def _fmt_kb(lang: str = "uk", back_step: str = None):
     rows = [[InlineKeyboardButton(text=t, callback_data=f"fmt:{v}") for t, v in FORMATS]]
     rows.append(_cancel_row(lang, back_step))
     return _kb(rows)
+
+
+def _fmt_text(lang: str, st: dict) -> str:
+    """Caption/text for the FORMAT step: novel info if already loaded, else just slug."""
+    info = st.get("novel_info")
+    if info:
+        title = info.get("rus_name") or info.get("eng_name") or st.get("slug", "")
+        rating = info.get("rating", {}).get("average") or "—"
+        status_str = "🔵 Завершено" if info.get("status", {}).get("id") == 2 else "🟢 Триває"
+        summary = (info.get("summary") or "").strip()
+        summary = summary[:500] if summary else "—"
+        return _t(
+            "fmt_prompt", lang,
+            title=escape(title), rating=rating, status=status_str, summary=escape(summary),
+        )
+    return _t("ask_fmt", lang, title=st.get("slug", ""))
+
+
+async def _ensure_novel_loaded(uid: int, slug: str) -> bool:
+    """Load novel info + branches into USER_STATE[uid]; cache so later steps skip API."""
+    st = USER_STATE.get(uid) or {}
+    if st.get("novel_info") and st.get("branches") is not None:
+        return True
+    try:
+        from web_app import normalize_novel_info, get_formatted_branches_with_teams
+        info = await asyncio.to_thread(api.get_novel_info, slug)
+        info = normalize_novel_info(info)
+        chapters = await asyncio.to_thread(api.get_novel_chapters, slug)
+        branches = get_formatted_branches_with_teams(info, chapters)
+        for bid in branches:
+            nums = [ch.get("number") for ch in chapters
+                    if any(b.get("branch_id") == bid for b in (ch.get("branches") or []))]
+            branches[bid]["range"] = (min(nums), max(nums)) if nums else None
+        st["total_chapters"] = len(chapters)
+        st["branches"] = branches
+        st["chapters_data"] = chapters
+        st["novel_info"] = info
+        save_user_state(uid, st)
+        return True
+    except Exception as e:
+        log.warning("Novel load failed for %s: %s", slug, e)
+        return False
 
 
 def _dev_kb(lang: str = "uk", back_step: str = "fmt"):
@@ -634,13 +680,20 @@ async def select_searched_slug(c: CallbackQuery):
 
     USER_STATE[uid] = {"step": "fmt", "url": url, "slug": slug, "lang": lang}
     save_user_state(uid, USER_STATE[uid])
-
-    await _safe_edit(
-        c,
-        _t("ask_fmt", lang, title=slug),
-        reply_markup=_fmt_kb(lang),
-    )
-    await c.answer()
+    await _ensure_novel_loaded(uid, slug)
+    st = USER_STATE[uid]
+    cover = (st.get("novel_info") or {}).get("cover")
+    if isinstance(cover, dict):
+        cover = cover.get("default") or cover.get("thumbnail")
+    try:
+        if cover:
+            await c.message.answer_photo(
+                cover, caption=_fmt_text(lang, st), reply_markup=_fmt_kb(lang), parse_mode="HTML"
+            )
+        else:
+            await c.message.answer(_fmt_text(lang, st), reply_markup=_fmt_kb(lang), parse_mode="HTML")
+    except Exception:
+        await _safe_edit(c, _fmt_text(lang, st), reply_markup=_fmt_kb(lang))
 
 
 @dp.callback_query(F.data.startswith("nav_back:"))
@@ -653,7 +706,18 @@ async def navigate_back(c: CallbackQuery):
     if target == "fmt":
         st["step"] = "fmt"
         save_user_state(uid, st)
-        await _safe_edit(c, _t("ask_fmt", lang, title=st.get("slug", "")), reply_markup=_fmt_kb(lang))
+        cover = (st.get("novel_info") or {}).get("cover")
+        if isinstance(cover, dict):
+            cover = cover.get("default") or cover.get("thumbnail")
+        try:
+            if cover:
+                await c.message.answer_photo(
+                    cover, caption=_fmt_text(lang, st), reply_markup=_fmt_kb(lang), parse_mode="HTML"
+                )
+            else:
+                await c.message.answer(_fmt_text(lang, st), reply_markup=_fmt_kb(lang), parse_mode="HTML")
+        except Exception:
+            await _safe_edit(c, _fmt_text(lang, st), reply_markup=_fmt_kb(lang))
     elif target == "dev":
         st["step"] = "dev"
         save_user_state(uid, st)
@@ -746,7 +810,23 @@ async def handle_text(m: types.Message):
             return
         USER_STATE[uid] = {"step": "fmt", "url": text, "slug": slug, "lang": lang}
         save_user_state(uid, USER_STATE[uid])
-        await m.answer(_t("ask_fmt", lang, title=slug), reply_markup=_fmt_kb(lang), parse_mode="HTML")
+        ok = await _ensure_novel_loaded(uid, slug)
+        st = USER_STATE[uid]
+        cover = (st.get("novel_info") or {}).get("cover")
+        if isinstance(cover, dict):
+            cover = cover.get("default") or cover.get("thumbnail")
+        try:
+            if cover:
+                await m.answer_photo(
+                    cover,
+                    caption=_fmt_text(lang, st),
+                    reply_markup=_fmt_kb(lang),
+                    parse_mode="HTML",
+                )
+            else:
+                await m.answer(_fmt_text(lang, st), reply_markup=_fmt_kb(lang), parse_mode="HTML")
+        except Exception:
+            await m.answer(_fmt_text(lang, st), reply_markup=_fmt_kb(lang), parse_mode="HTML")
     else:
         await _render_search_page(m, text, page=1, lang=lang)
 
@@ -857,27 +937,19 @@ async def choose_img(c: CallbackQuery):
     USER_STATE[uid]["step"] = "team"
     save_user_state(uid, USER_STATE[uid])
 
-    slug = USER_STATE[uid]["slug"]
-    try:
-        info = await asyncio.to_thread(api.get_novel_info, slug)
-        from web_app import normalize_novel_info, get_formatted_branches_with_teams
-        info = normalize_novel_info(info)
-        chapters = await asyncio.to_thread(api.get_novel_chapters, slug)
-        branches = get_formatted_branches_with_teams(info, chapters)
-        for bid in branches:
-            nums = [ch.get("number") for ch in chapters
-                    if any(b.get("branch_id") == bid for b in (ch.get("branches") or []))]
-            branches[bid]["range"] = (min(nums), max(nums)) if nums else None
-        USER_STATE[uid]["total_chapters"] = len(chapters)
-        USER_STATE[uid]["branches"] = branches
-        USER_STATE[uid]["chapters_data"] = chapters
-        USER_STATE[uid]["novel_info"] = info
-    except Exception as e:
-        USER_STATE.pop(uid, None)
-        save_user_state(uid, None)
-        await _safe_edit(c, _t("novel_load_err", lang, err=e))
-        await c.answer()
-        return
+    st = USER_STATE[uid]
+    # Info already loaded at FORMAT step; only (re)load if missing.
+    if not (st.get("novel_info") and st.get("branches") is not None):
+        if not await _ensure_novel_loaded(uid, st["slug"]):
+            USER_STATE.pop(uid, None)
+            save_user_state(uid, None)
+            await _safe_edit(c, _t("novel_load_err", lang, err="load failed"))
+            await c.answer()
+            return
+        st = USER_STATE[uid]
+
+    branches = st.get("branches", {})
+    info = st.get("novel_info", {})
 
     if not branches:
         USER_STATE[uid]["branch_id"] = None
@@ -893,7 +965,7 @@ async def choose_img(c: CallbackQuery):
 
     cover = (info.get("cover") or {}).get("default") or (info.get("cover") or {}).get("thumbnail")
     title = info.get("rus_name") or info.get("eng_name") or USER_STATE[uid]["slug"]
-    rating = info.get("rating", {}).get("average") or "5.0"
+    rating = info.get("rating", {}).get("average") or "—"
     status_str = "🔵 Завершено" if info.get("status", {}).get("id") == 2 else "🟢 Триває"
 
     cap = f"📕 <b>{title}</b>\n⭐ Рейтинг: <b>{rating}</b> | {status_str}\n" + _t("ask_team", lang, img=USER_STATE[uid]['images_mode'])

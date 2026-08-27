@@ -377,6 +377,15 @@ I18N = {
 
 
 def _get_lang(user: types.User = None) -> str:
+    # 1) explicit per-user preference stored in DB (set via 🌐 Мова button) wins
+    if user is not None:
+        try:
+            saved = get_user_settings(user.id).get("lang")
+            if saved in ("uk", "ru", "en"):
+                return saved
+        except Exception:
+            pass
+    # 2) fall back to Telegram client language
     if not user or not user.language_code:
         return "uk"
     code = user.language_code.lower()
@@ -897,7 +906,7 @@ async def toggle_setting(c: CallbackQuery):
     token_str = _t("token_on", lang) if st.get("token") else _t("token_off", lang)
     await _safe_edit(
         c,
-        _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=_dev_label(st.get('device', 'generic'), lang), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
+        _t("settings_info", fmt=st.get('fmt', 'epub').upper(), dev=_dev_label(st.get('device', 'generic'), lang), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
         reply_markup=_settings_kb(uid, lang),
     )
     await c.answer()
@@ -990,9 +999,12 @@ def _parse_range(raw: str, total: int):
         a, b = int(a), int(b)
         if a > b or a < 1:
             return None
-        out = []
-        for n in range(a, min(b, total or b) + 1):
-            out.append({"volume": "0", "number": n})
+        # NOTE: do NOT clamp to USER_STATE["total_chapters"] — the API may return
+        # a partial chapter list, making total an undercount that would silently
+        # shrink the requested range (e.g. "1-50" -> 6 chapters). run_download_task
+        # filters to actually-existing chapters anyway. Cap only against absurd input.
+        b = min(b, a + 5000)
+        out = [{"volume": "0", "number": n} for n in range(a, b + 1)]
         return out
     except ValueError:
         return None
@@ -1024,7 +1036,7 @@ async def act_menu(c: CallbackQuery):
         st = get_user_settings(c.from_user.id)
         token_str = _t("token_on", lang) if st.get("token") else _t("token_off", lang)
         await c.message.answer(
-            _t("settings_info", lang, fmt=st.get('fmt', 'epub').upper(), dev=_dev_label(st.get('device', 'generic'), lang), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
+            _t("settings_info", fmt=st.get('fmt', 'epub').upper(), dev=_dev_label(st.get('device', 'generic'), lang), img=_img_label(st.get('images_mode', 'images'), lang), lang=lang, token_status=token_str),
             reply_markup=_settings_kb(c.from_user.id, lang),
             parse_mode="HTML",
         )

@@ -9,6 +9,7 @@ It only:
 """
 import asyncio
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -99,6 +100,99 @@ def _purge_old_tasks() -> None:
         tasks.pop(task_id, None)
 
 
+def _norm_team_name(name: str) -> str:
+    """Normalize a translation-team name for fuzzy matching.
+
+    API team names are inconsistent with what the bot stores (e.g. trailing
+    dots, case, extra spaces): 'OneSecond Evil Corp.' vs 'OneSecond Evil Corp'.
+    Strip casing, surrounding whitespace and trailing/ambient punctuation so
+    the selected_team_keys filter actually matches chapters.
+    """
+    if not name:
+        return ""
+    s = str(name).strip().lower()
+    # drop a trailing period and any stray punctuation, collapse spaces
+    s = re.sub(r"[.\u2026]+$", "", s)          # trailing dots / ellipsis
+    s = re.sub(r"[^\w\s\-]", " ", s)            # keep word chars, dash, space
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _dedup_chapters(chapters, selected_team_names, branch_id):
+    """Collapse chapters to ONE per number, preferring the selected team/branch.
+
+    RanobeLib returns the same chapter number under multiple branches/teams
+    (e.g. '1-50' resolves to 80 raw chapters across two teams). A user asking
+    for '1-50' expects exactly 50 files. We keep one chapter per number:
+
+      1. a chapter whose branch matches branch_id AND team is in selected_team_names
+      2. else a chapter whose branch matches branch_id (any team)
+      3. else the first chapter for that number
+
+    The kept chapter's ``branches`` is narrowed to the matched branch so the
+    creator downloads exactly that translation, not a sibling team's.
+    """
+    groups = {}
+    for ch in chapters:
+        key = str(ch.get("number", ""))
+        groups.setdefault(key, []).append(ch)
+
+    out = []
+    for key, items in groups.items():
+        pick = None  # (chapter, branch_entry)
+        # 1) selected team + branch
+        if selected_team_names:
+            for ch in items:
+                for b in ch.get("branches", []) or []:
+                    if not isinstance(b, dict):
+                        continue
+                    bid = str(b.get("branch_id") if b.get("branch_id") is not None else "0")
+                    if branch_id and bid != branch_id:
+                        continue
+                    names = [
+                        _norm_team_name(t["name"])
+                        for t in (b.get("teams") or [])
+                        if isinstance(t, dict) and t.get("name")
+                    ]
+                    if any(n in selected_team_names for n in names):
+                        pick = (ch, b)
+                        break
+                if pick:
+                    break
+        # 2) selected branch, any team
+        if pick is None and branch_id:
+            for ch in items:
+                for b in ch.get("branches", []) or []:
+                    if not isinstance(b, dict):
+                        continue
+                    bid = str(b.get("branch_id") if b.get("branch_id") is not None else "0")
+                    if bid == branch_id:
+                        pick = (ch, b)
+                        break
+                if pick:
+                    break
+        # 3) first available
+        if pick is None:
+            ch0 = items[0]
+            b0 = (ch0.get("branches", []) or [None])[0]
+            pick = (ch0, b0)
+
+        ch, b = pick
+        if isinstance(b, dict):
+            ch = dict(ch)  # never mutate the source chapter
+            ch["branches"] = [b]
+        out.append(ch)
+
+    def _num(ch):
+        try:
+            return float(ch.get("number", 0))
+        except (TypeError, ValueError):
+            return float("inf")
+
+    out.sort(key=_num)
+    return out
+
+
 def run_download_task(task_id: str, body: dict):
     _purge_old_tasks()
     try:
@@ -158,64 +252,19 @@ def run_download_task(task_id: str, body: dict):
         selected_team_names = set()
         for key in selected_team_keys:
             if isinstance(key, str) and "::" in key:
-                selected_team_names.add(key.split("::", 1)[0])
+                selected_team_names.add(_norm_team_name(key.split("::", 1)[0]))
 
-        # Filter chapters by selected teams inside the chosen branch.
-        # When no specific team is selected, keep all chapters (branch filter or full list).
-        if selected_team_names:
-            if not branch_id:
-                # No branch chosen but teams selected: pick the branch from the first team key.
-                for key in selected_team_keys:
-                    if isinstance(key, str) and "::" in key:
-                        branch_id = key.split("::", 1)[1] or None
-                        break
-            filtered_by_team = []
-            seen_team = set()
+        # If a team was selected but no branch, derive the branch from the team key.
+        if not branch_id and selected_team_keys:
+            for key in selected_team_keys:
+                if isinstance(key, str) and "::" in key:
+                    branch_id = key.split("::", 1)[1] or None
+                    break
 
-            def _chapter_team_names(branch):
-                """Extract team names from a raw or normalized branch entry."""
-                if not isinstance(branch, dict):
-                    return []
-                names = branch.get("team_names")
-                if isinstance(names, list) and names:
-                    return [str(n) for n in names]
-                teams_list = branch.get("teams") or []
-                out = []
-                for t in teams_list:
-                    if isinstance(t, dict) and t.get("name"):
-                        out.append(str(t["name"]))
-                    elif isinstance(t, str):
-                        out.append(t)
-                if not out:
-                    team_info = branch.get("team") or {}
-                    if isinstance(team_info, dict) and team_info.get("name"):
-                        out.append(str(team_info["name"]))
-                return out
-
-            for ch in chapters_data:
-                for branch in ch.get("branches", []) or []:
-                    bid = "0"
-                    if isinstance(branch, dict):
-                        bid = str(branch.get("branch_id") if branch.get("branch_id") is not None else "0")
-                    elif branch is not None:
-                        bid = str(branch)
-                    if branch_id and bid != branch_id:
-                        continue
-                    names = _chapter_team_names(branch)
-                    if not any(n in selected_team_names for n in names):
-                        continue
-                    cid = ch.get("id")
-                    tkey = (cid, tuple(sorted(names)))
-                    if tkey in seen_team:
-                        continue
-                    seen_team.add(tkey)
-                    # Keep only the branch entry matching the selected team so the
-                    # creator downloads exactly this translation, not another team's.
-                    if isinstance(ch, dict):
-                        ch["branches"] = [branch]
-                    filtered_by_team.append(ch)
-            if filtered_by_team:
-                chapters_data = filtered_by_team
+        # Deduplicate to one chapter per number, preferring selected team/branch.
+        # A user asking for '1-50' gets exactly 50 chapters (no duplicate translations).
+        if chapters_data:
+            chapters_data = _dedup_chapters(chapters_data, selected_team_names, branch_id)
 
         settings.set("download_cover", cover_enabled)
         settings.set("download_images", images_enabled)

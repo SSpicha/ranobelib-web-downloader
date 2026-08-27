@@ -119,32 +119,39 @@ def _norm_team_name(name: str) -> str:
     return s
 
 
-def _dedup_chapters(chapters, selected_team_names, branch_id):
-    """Collapse chapters to ONE per number, preferring the selected team/branch.
+def _dedup_chapters(chapters, selected_team_names, branch_id, strict_team=False):
+    """Collapse chapters to ONE per (volume, number), preferring selected team/branch.
 
     RanobeLib returns the same chapter number under multiple branches/teams
     (e.g. '1-50' resolves to 80 raw chapters across two teams). A user asking
-    for '1-50' expects exactly 50 files. We keep one chapter per number:
+    for '1-50' expects exactly 50 files. We keep one chapter per (volume, number):
 
       1. a chapter whose branch matches branch_id AND team is in selected_team_names
       2. else a chapter whose branch matches branch_id (any team)
       3. else the first chapter for that number
 
+    When ``strict_team`` is True and a specific team was selected, a number that
+    the selected team did NOT translate is SKIPPED (no fallback to another team),
+    so the user gets exactly the chosen team's translation — possibly with gaps.
+
     The kept chapter's ``branches`` is narrowed to the matched branch so the
     creator downloads exactly that translation, not a sibling team's.
     """
     def _group_key(ch):
-        # Normalize the chapter number so "541" and "541.0" collapse to one
+        # Group by (volume, number) so a side-story like "541.2" in a different
+        # volume does not collide with "541" in another volume when split_mode
+        # is "volume". Normalize the number so "541" and "541.0" collapse to one
         # group (APIs occasionally emit trailing .0). Invalid numbers are
         # returned as None so the caller can skip them instead of merging
         # every number-less chapter into a single "".
         num = ch.get("number")
         if num is None:
             return None
+        vol = str(ch.get("volume", "0")).strip() or "0"
         try:
-            return f"{float(num):g}"
+            return f"{vol}:{float(num):g}"
         except (TypeError, ValueError):
-            return str(num).strip()
+            return f"{vol}:{str(num).strip()}"
 
     groups = {}
     for ch in chapters:
@@ -187,21 +194,50 @@ def _dedup_chapters(chapters, selected_team_names, branch_id):
                         break
                 if pick:
                     break
+        # strict_team: if a specific team was chosen, refuse fallback picks
+        # (step 2/3) that come from a different team — skip the number instead.
+        if strict_team and selected_team_names and pick is not None:
+            _b = pick[1]
+            _names = (
+                [
+                    _norm_team_name(t["name"])
+                    for t in (_b.get("teams") or [])
+                    if isinstance(t, dict) and t.get("name")
+                ]
+                if isinstance(_b, dict)
+                else []
+            )
+            if not any(n in selected_team_names for n in _names):
+                pick = None
+
         # 3) first available — but if a branch was requested, only accept a
-        #    chapter that actually belongs to that branch (else skip the number)
+        #    chapter that actually belongs to that branch (else skip the number).
+        #    Under strict_team, also require the chapter's team to be selected.
         if pick is None:
             if branch_id:
                 for ch in items:
                     for b in ch.get("branches", []) or []:
-                        if isinstance(b, dict) and str(
-                            b.get("branch_id") if b.get("branch_id") is not None else "0"
-                        ) == branch_id:
-                            pick = (ch, b)
-                            break
+                        if not isinstance(b, dict):
+                            continue
+                        if (
+                            str(b.get("branch_id") if b.get("branch_id") is not None else "0")
+                            != branch_id
+                        ):
+                            continue
+                        if strict_team and selected_team_names:
+                            _names = [
+                                _norm_team_name(t["name"])
+                                for t in (b.get("teams") or [])
+                                if isinstance(t, dict) and t.get("name")
+                            ]
+                            if not any(n in selected_team_names for n in _names):
+                                continue
+                        pick = (ch, b)
+                        break
                     if pick:
                         break
                 if pick is None:
-                    continue  # requested branch has no chapter for this number
+                    continue  # requested branch has no (matching-team) chapter for this number
             else:
                 ch0 = items[0]
                 b0 = (ch0.get("branches", []) or [None])[0]
@@ -294,10 +330,46 @@ def run_download_task(task_id: str, body: dict):
                     branch_id = key.split("::", 1)[1] or None
                     break
 
-        # Deduplicate to one chapter per number, preferring selected team/branch.
-        # A user asking for '1-50' gets exactly 50 chapters (no duplicate translations).
+        # Deduplicate to one chapter per (volume, number), preferring selected
+        # team/branch. A user asking for '1-50' gets exactly 50 chapters (no
+        # duplicate translations). When dedup is disabled (raw mode) we keep
+        # every raw chapter; when strict_team is set, chapters the selected team
+        # did not translate are skipped instead of falling back to another team.
+        dedup = body.get("dedup", True)
+        strict_team = bool(body.get("strict_team", False))
+        if chapters_data and dedup:
+            chapters_data = _dedup_chapters(
+                chapters_data, selected_team_names, branch_id, strict_team=strict_team
+            )
+
+        # Track which team actually provided each kept chapter, for transparency
+        # in the final Telegram message ("47 from your team, 3 from others").
         if chapters_data:
-            chapters_data = _dedup_chapters(chapters_data, selected_team_names, branch_id)
+            own = 0
+            fallback = 0
+            for ch in chapters_data:
+                b = (ch.get("branches", []) or [None])[0]
+                names = (
+                    [
+                        _norm_team_name(t["name"])
+                        for t in (b.get("teams") or [])
+                        if isinstance(t, dict) and t.get("name")
+                    ]
+                    if isinstance(b, dict)
+                    else []
+                )
+                if selected_team_names and any(n in selected_team_names for n in names):
+                    own += 1
+                else:
+                    fallback += 1
+            with tasks_lock:
+                if task_id in tasks:
+                    tasks[task_id]["team_stats"] = {
+                        "own": own,
+                        "fallback": fallback,
+                        "strict": strict_team,
+                        "dedup": dedup,
+                    }
 
         settings.set("download_cover", cover_enabled)
         settings.set("download_images", images_enabled)

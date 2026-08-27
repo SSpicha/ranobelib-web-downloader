@@ -555,9 +555,7 @@ def _team_kb(branches, lang: str = "uk", back_step: str = "img"):
 
 def _range_kb(total: int, lang: str = "uk", back_step: str = "team", uid: int = None):
     strict = (USER_STATE.get(uid, {}) or {}).get("strict_team", False) if uid else False
-    dedup = (USER_STATE.get(uid, {}) or {}).get("dedup", True) if uid else True
     strict_lbl = "🔒 " + (_t("on", lang) if strict else _t("off", lang)) + " — " + _t("only_my_team", lang)
-    dedup_lbl = "📚 " + (_t("on", lang) if not dedup else _t("off", lang)) + " — " + _t("all_translations", lang)
     rows = [
         [InlineKeyboardButton(text=_t("btn_range_all", lang), callback_data="rng:ALL")],
         [
@@ -566,7 +564,6 @@ def _range_kb(total: int, lang: str = "uk", back_step: str = "team", uid: int = 
         ],
         [
             InlineKeyboardButton(text=strict_lbl, callback_data="rng:STRICT"),
-            InlineKeyboardButton(text=dedup_lbl, callback_data="rng:DEDUP"),
         ],
     ]
     if total >= 50:
@@ -1221,10 +1218,9 @@ async def choose_range_preset(c: CallbackQuery):
 
     val = c.data.split(":", 1)[1]
 
-    # Toggle switches — do not start the download, just flip state and redraw.
-    if val in ("STRICT", "DEDUP"):
-        key = "strict_team" if val == "STRICT" else "dedup"
-        USER_STATE[uid][key] = not USER_STATE[uid].get(key, (val == "DEDUP"))
+    # Toggle switch — do not start the download, just flip state and redraw.
+    if val == "STRICT":
+        USER_STATE[uid]["strict_team"] = not USER_STATE[uid].get("strict_team", False)
         save_user_state(uid, USER_STATE[uid])
         total = USER_STATE[uid].get("total_chapters", 0)
         team = USER_STATE[uid].get("team_name") or "—"

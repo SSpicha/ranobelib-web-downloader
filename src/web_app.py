@@ -8,6 +8,7 @@ It only:
 - serves generated files from /downloads
 """
 import asyncio
+import copy
 import os
 import re
 import sys
@@ -132,9 +133,24 @@ def _dedup_chapters(chapters, selected_team_names, branch_id):
     The kept chapter's ``branches`` is narrowed to the matched branch so the
     creator downloads exactly that translation, not a sibling team's.
     """
+    def _group_key(ch):
+        # Normalize the chapter number so "541" and "541.0" collapse to one
+        # group (APIs occasionally emit trailing .0). Invalid numbers are
+        # returned as None so the caller can skip them instead of merging
+        # every number-less chapter into a single "".
+        num = ch.get("number")
+        if num is None:
+            return None
+        try:
+            return f"{float(num):g}"
+        except (TypeError, ValueError):
+            return str(num).strip()
+
     groups = {}
     for ch in chapters:
-        key = str(ch.get("number", ""))
+        key = _group_key(ch)
+        if key is None:
+            continue
         groups.setdefault(key, []).append(ch)
 
     out = []
@@ -159,8 +175,8 @@ def _dedup_chapters(chapters, selected_team_names, branch_id):
                         break
                 if pick:
                     break
-        # 2) selected branch, any team
-        if pick is None and branch_id:
+        # 2) selected branch, any team (only when a specific team was NOT chosen)
+        if pick is None and branch_id and not selected_team_names:
             for ch in items:
                 for b in ch.get("branches", []) or []:
                     if not isinstance(b, dict):
@@ -171,16 +187,33 @@ def _dedup_chapters(chapters, selected_team_names, branch_id):
                         break
                 if pick:
                     break
-        # 3) first available
+        # 3) first available — but if a branch was requested, only accept a
+        #    chapter that actually belongs to that branch (else skip the number)
         if pick is None:
-            ch0 = items[0]
-            b0 = (ch0.get("branches", []) or [None])[0]
-            pick = (ch0, b0)
+            if branch_id:
+                for ch in items:
+                    for b in ch.get("branches", []) or []:
+                        if isinstance(b, dict) and str(
+                            b.get("branch_id") if b.get("branch_id") is not None else "0"
+                        ) == branch_id:
+                            pick = (ch, b)
+                            break
+                    if pick:
+                        break
+                if pick is None:
+                    continue  # requested branch has no chapter for this number
+            else:
+                ch0 = items[0]
+                b0 = (ch0.get("branches", []) or [None])[0]
+                pick = (ch0, b0)
+
+        if pick is None:
+            continue  # requested branch has no chapter for this number
 
         ch, b = pick
         if isinstance(b, dict):
-            ch = dict(ch)  # never mutate the source chapter
-            ch["branches"] = [b]
+            ch = copy.deepcopy(ch)  # never mutate the source chapter
+            ch["branches"] = [copy.deepcopy(b)]  # nor the matched branch entry
         out.append(ch)
 
     def _num(ch):

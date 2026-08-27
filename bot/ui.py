@@ -208,6 +208,10 @@ I18N = {
         "subs_empty": "📌 У вас немає активних підписок. Щоб підписатися, шукайте новелу через /search.",
         "token_saved": "🔑 Токен авторизації успішно збережено!",
         "token_ask": "🔑 Введіть свій RanobeLIB токен командою: <code>/login YOUR_TOKEN</code>",
+        "on": "УВІМК",
+        "off": "ВИМК",
+        "only_my_team": "Тільки моя команда",
+        "all_translations": "Усі переклади (без дедупу)",
     },
     "ru": {
         "start_title": "📚 <b>RanobeLIB бот</b>\nСкачивай ранобэ с ranobelib.me прямо в Telegram.\n\n"
@@ -288,8 +292,12 @@ I18N = {
         "sub_notify": "🔔 <b>Новые главы!</b>\nНовелла: <b>{title}</b>\nНовая глава: {max_ch}",
         "subs_list": "📌 <b>Ваши подписки:</b>\n\n{items}",
         "subs_empty": "📌 У вас нет активных подписок. Чтобы подписаться, ищите новеллу через /search.",
-        "token_saved": "🔑 Токен авторизации успешно сохранен!",
+        "token_saved": "🔑 Токен авторизации успешно сохранён!",
         "token_ask": "🔑 Введите свой RanobeLIB токен командой: <code>/login YOUR_TOKEN</code>",
+        "on": "ВКЛ",
+        "off": "ВЫКЛ",
+        "only_my_team": "Только моя команда",
+        "all_translations": "Все переводы (без дедупа)",
     },
     "en": {
         "start_title": "📚 <b>RanobeLIB bot</b>\nDownload light novels from ranobelib.me directly in Telegram.\n\n"
@@ -372,6 +380,10 @@ I18N = {
         "subs_empty": "📌 You have no active subscriptions. Use /search to find and subscribe to novels.",
         "token_saved": "🔑 Authorization token successfully saved!",
         "token_ask": "🔑 Enter your RanobeLIB token via: <code>/login YOUR_TOKEN</code>",
+        "on": "ON",
+        "off": "OFF",
+        "only_my_team": "Only my team",
+        "all_translations": "All translations (no dedup)",
     }
 }
 
@@ -541,13 +553,21 @@ def _team_kb(branches, lang: str = "uk", back_step: str = "img"):
     return _kb(rows)
 
 
-def _range_kb(total: int, lang: str = "uk", back_step: str = "team"):
+def _range_kb(total: int, lang: str = "uk", back_step: str = "team", uid: int = None):
+    strict = (USER_STATE.get(uid, {}) or {}).get("strict_team", False) if uid else False
+    dedup = (USER_STATE.get(uid, {}) or {}).get("dedup", True) if uid else True
+    strict_lbl = "🔒 " + (_t("on", lang) if strict else _t("off", lang)) + " — " + _t("only_my_team", lang)
+    dedup_lbl = "📚 " + (_t("on", lang) if not dedup else _t("off", lang)) + " — " + _t("all_translations", lang)
     rows = [
         [InlineKeyboardButton(text=_t("btn_range_all", lang), callback_data="rng:ALL")],
         [
             InlineKeyboardButton(text=_t("btn_split_vol", lang), callback_data="rng:SPLIT_VOL"),
             InlineKeyboardButton(text=_t("btn_split_chunk", lang), callback_data="rng:SPLIT_CHUNK"),
-        ]
+        ],
+        [
+            InlineKeyboardButton(text=strict_lbl, callback_data="rng:STRICT"),
+            InlineKeyboardButton(text=dedup_lbl, callback_data="rng:DEDUP"),
+        ],
     ]
     if total >= 50:
         r2 = [InlineKeyboardButton(text="📖 1-50", callback_data="rng:1-50")]
@@ -1111,11 +1131,13 @@ async def choose_img(c: CallbackQuery):
     if not branches:
         USER_STATE[uid]["branch_id"] = None
         USER_STATE[uid]["step"] = "range"
+        USER_STATE[uid].setdefault("strict_team", False)
+        USER_STATE[uid].setdefault("dedup", True)
         total = USER_STATE[uid].get("total_chapters", 0)
         await _safe_edit(
             c,
             _t("ask_range", lang, team="—", rng_hint="", total=total),
-            reply_markup=_range_kb(total, lang, back_step="img"),
+            reply_markup=_range_kb(total, lang, back_step="img", uid=uid),
         )
         await c.answer()
         return
@@ -1171,6 +1193,8 @@ async def choose_team(c: CallbackQuery):
         USER_STATE[uid]["branch_id"] = bid
         USER_STATE[uid]["team_name"] = USER_STATE[uid]["branches"].get(bid, {}).get("name")
     USER_STATE[uid]["step"] = "range"
+    USER_STATE[uid].setdefault("strict_team", False)
+    USER_STATE[uid].setdefault("dedup", True)
     save_user_state(uid, USER_STATE[uid])
 
     total = USER_STATE[uid].get("total_chapters", 0)
@@ -1182,7 +1206,7 @@ async def choose_team(c: CallbackQuery):
     await _safe_edit(
         c,
         _t("ask_range", lang, team=name, rng_hint=rng_hint, total=total),
-        reply_markup=_range_kb(total, lang, back_step="team"),
+        reply_markup=_range_kb(total, lang, back_step="team", uid=uid),
     )
     await c.answer()
 
@@ -1196,6 +1220,22 @@ async def choose_range_preset(c: CallbackQuery):
         return
 
     val = c.data.split(":", 1)[1]
+
+    # Toggle switches — do not start the download, just flip state and redraw.
+    if val in ("STRICT", "DEDUP"):
+        key = "strict_team" if val == "STRICT" else "dedup"
+        USER_STATE[uid][key] = not USER_STATE[uid].get(key, (val == "DEDUP"))
+        save_user_state(uid, USER_STATE[uid])
+        total = USER_STATE[uid].get("total_chapters", 0)
+        team = USER_STATE[uid].get("team_name") or "—"
+        await _safe_edit(
+            c,
+            _t("ask_range", lang, team=team, rng_hint="", total=total),
+            reply_markup=_range_kb(total, lang, back_step="team", uid=uid),
+        )
+        await c.answer()
+        return
+
     split_mode = "none"
     if val == "SPLIT_VOL":
         split_mode = "volume"
@@ -1223,20 +1263,38 @@ async def choose_range_preset(c: CallbackQuery):
 
 
 async def _deliver(m: types.Message, outcome: str, lang: str = "uk"):
+    def _stats_caption(fname: str, raw: str) -> str:
+        caption = f"✅ {fname}"
+        if "|" in raw:
+            payload = raw.split("|", 1)[1]
+            try:
+                s = json.loads(payload)
+                if s.get("fallback"):
+                    caption += f"\n⚠️ {s.get('own', 0)} від обраної команди, {s.get('fallback', 0)} — від інших (тієї ж гілки)"
+                elif s.get("strict"):
+                    caption += f"\n🔒 Тільки своя команда: {s.get('own', 0)} глав"
+                elif s.get("dedup") is False:
+                    caption += f"\n📚 Усі переклади: {s.get('own', 0) + s.get('fallback', 0)} сирих глав"
+            except Exception:
+                pass
+        return caption
+
     if outcome.startswith("__FILES__:"):
-        filenames = [f for f in outcome.split(":", 1)[1].split("|") if f]
+        raw = outcome.split(":", 1)[1]
+        filenames = [f for f in raw.split("|")[0].split("|") if f]
         for fname in filenames:
             fpath = DOWNLOADS_DIR / fname
             if fpath.exists():
-                await m.answer_document(FSInputFile(fpath), caption=f"✅ {fname}")
+                await m.answer_document(FSInputFile(fpath), caption=_stats_caption(fname, raw))
     elif outcome.startswith("__FILE__:"):
-        fname = outcome.split(":", 1)[1]
+        raw = outcome.split(":", 1)[1]
+        fname = raw.split("|", 1)[0]
         fpath = DOWNLOADS_DIR / fname
         if not fpath.exists():
             log.error("deliver: file missing %s", fpath)
             await m.answer(_t("file_missing", lang))
             return
-        await m.answer_document(FSInputFile(fpath), caption=f"✅ {fname}")
+        await m.answer_document(FSInputFile(fpath), caption=_stats_caption(fname, raw))
     else:
         await m.answer(outcome)
 
@@ -1322,6 +1380,8 @@ def _do_download(uid: int, m: types.Message = None, loop=None, lang: str = "uk")
         "compress": True,
         "branch_id": branch_id,
         "selected_team_keys": selected_team_keys,
+        "strict_team": bool(st.get("strict_team", False)),
+        "dedup": bool(st.get("dedup", True)),
         "chapters": [] if chapters == "ALL" else chapters,
         "split_mode": split_mode,
         "chunk_size": 150,
@@ -1351,9 +1411,11 @@ def _do_download(uid: int, m: types.Message = None, loop=None, lang: str = "uk")
         if t.get("status") == "done":
             file_list = t.get("file_list") or []
             file_name = t.get("file")
+            stats = t.get("team_stats") or {}
+            stats_json = __import__("json").dumps(stats, ensure_ascii=False)
             if file_list and len(file_list) > 1:
                 log.info("download done uid=%s multi-files=%s", uid, len(file_list))
-                return f"__FILES__:{'|'.join(file_list)}"
+                return f"__FILES__:{'|'.join(file_list)}|{stats_json}"
             if not file_name:
                 log.error("download done but no file uid=%s", uid)
                 return _t("file_missing", lang)
@@ -1363,7 +1425,7 @@ def _do_download(uid: int, m: types.Message = None, loop=None, lang: str = "uk")
             if PUBLIC_BASE and size > TELEGRAM_DOC_LIMIT:
                 return _t("file_too_large_url", lang, file_name=file_name, size=size//1024//1024, url=f"{PUBLIC_BASE}/api/files/{file_name}")
             if size <= TELEGRAM_DOC_LIMIT:
-                return f"__FILE__:{file_name}"
+                return f"__FILE__:{file_name}|{stats_json}"
             return _t("file_too_large", lang, file_name=file_name, size=size//1024//1024)
         pct = t.get("progress", 0)
         if pct != last_pct:
